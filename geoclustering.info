@@ -1,0 +1,8 @@
+; $Id$
+name = Geoclustering
+description = Builds a database table with geographic clusters of nodes
+core = 6.x
+dependencies[] = views
+dependencies[] = content
+dependencies[] = geo
+dependencies[] = geo_field

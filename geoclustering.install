@@ -1,0 +1,182 @@
+<?php
+
+function geoclustering_schema()
+{
+		/****************************************/
+		/*****                              *****/
+		/***** geoclustering_clusters table *****/
+		/*****                              *****/
+		/****************************************/
+
+	module_load_include('inc','geo','includes/geo.api');
+	$geo=geo_load(array('name' => 'geoclustering_clusters'));
+
+	$fields=array(
+			'cluster_id' => array(
+				'description' => 'Primary key; required by Views, ' .
+											'unnecessary for anything else',
+				'type' => 'serial',
+				'not null' => TRUE,
+				),
+
+			'params_hash' => array(
+				'description' => 'Hash of parameters of the tree where ' .
+												'this cluster belongs to',
+				'type' => 'int',
+				'size' => 'big',
+				'not null' => TRUE,
+				),
+
+			'level' => array(
+				'description' => 'Level in a tree of clusters',
+				'type' => 'int',
+				'not null' => TRUE,
+				'unsigned' => TRUE,
+				'size' => 'small',
+				),
+
+			'idx' => array(
+				'description' => 'Cluster idx, which (in combination with ' .
+						'level) identifies the geographical region ' .
+						'of the cluster',
+				'type' => 'int',
+				'not null' => TRUE,
+				'unsigned' => TRUE,
+				),
+
+			'nr_of_nodes' => array(
+				'description' => 'Number of nodes in this cluster',
+				'type' => 'int',
+				'not null' => TRUE,
+				'unsigned' => TRUE,
+				),
+
+			'summed_fields' => array(
+				'description' => 'Summed data fields from nodes ' .
+														'in this cluster',
+				'type' => 'text',
+				'not null' => TRUE,
+				),
+			);
+
+	$fields=array_merge($fields,$geo->sqlFieldDefinition('coords'));
+
+	return array(
+		'geoclustering_clusters' => array(
+			'description' => 'Stores clusters for Geoclustering module',
+			'fields' => $fields,
+			'primary key' => array('cluster_id'),
+			'unique keys' => array('index' =>
+								array('params_hash','level','idx')),
+			),
+
+			/*******************************************/
+			/*****                                 *****/
+			/***** geoclustering_tree_params table *****/
+			/*****                                 *****/
+			/*******************************************/
+
+		'geoclustering_tree_params' => array(
+			'description' => 'Stores settings for each clustering tree',
+			'export' => array(
+				'key' => 'name',
+				'default hook' => 'geoclustering_tree_params',
+				),
+			'fields' => array(
+				'name' => array(
+					'description' => 'Machine-readable unique tree name',
+					'type' => 'text',
+					'not null' => TRUE,
+					),
+				'description' => array(
+					'description' => 'Human-readable description of the tree',
+					'type' => 'text',
+					),
+				'geofield_name' => array(
+					'description' => 'CCK field name that stores Node ' .
+						'coordinates for nodes that match node_conditions. ' .
+						'Geoclustering takes its input data from ' .
+						'these fields',
+					'type' => 'text',
+					'not null' => TRUE,
+					),
+				'maxlevel' => array(
+					'description' => 'Number of cluster tree levels ' .
+							'Geoclustering should build. Higher values ' .
+							'mean more detailed clusters, but need more ' .
+							'server horsepower. Default is 27 which means ' .
+							'ca 2x2km clusters in the bottom of tree; ' .
+							'increasing it by one halves the cluster area ' .
+							'(to 1.4x1.4km), decreasing by one ' .
+							'doubles the area (2.8x2.8km). Minimum is 0, ' .
+							'which means a single cluster covering ' .
+							'all Earth.',
+					'type' => 'int',
+					'not null' => TRUE,
+					'unsigned' => TRUE,
+					'default' => 27,
+					),
+				'node_conditions' => array(
+					'description' => 'PHP array of field_name => ' .
+							'required_value mappings that specify ' .
+							'requirements that a Node must meet in order ' .
+							'to be included in this cluster tree. ' .
+							'field_name can be a {node} table field ' .
+							"('type', 'status', ...) or a CCK field name " .
+							"(e.g. 'field_myfield'). Multiple requirements " .
+							"are ANDed. Example: array('type' => 'mytype', " .
+							"'status' => 1, 'field_placemark_type' => " .
+							"'school').",
+					'type' => 'text',
+					'serialize' => TRUE,
+					),
+				),
+			'primary key' => array('name'),
+			),
+
+			/**********************************************/
+			/*****                                    *****/
+			/***** geoclustering_uptodate_trees table *****/
+			/*****                                    *****/
+			/**********************************************/
+
+		'geoclustering_uptodate_trees' => array(
+			'description' => "Stores params_hash'es for trees that are " .
+							"up to date in {geoclustering_clusters} table",
+			'fields' => array(
+				'params_hash' => array(
+					'description' => 'Hash of parameters of the tree',
+					'type' => 'int',
+					'size' => 'big',
+					'not null' => TRUE,
+					),
+				),
+			'primary key' => array('params_hash'),
+			),
+		);
+	}
+
+function geoclustering_install()
+{
+	module_load_include('inc','geo','includes/geo.api');
+	$geo=geo_sql_load();
+	$geo->setTitle('geoclustering_clusters');
+	$geo->setName('geoclustering_clusters');
+	$geo->setSRID(4326);
+	$geo->setGeoType(GEO_TYPE_POINT);
+	$geo->setTableName('geoclustering_clusters');
+	$geo->setColumnName('coords');
+	geo_save($geo);
+
+	drupal_install_schema('geoclustering');
+
+	$geo->setIndexed(TRUE,TRUE);
+	}
+
+function geoclustering_uninstall()
+{
+	drupal_uninstall_schema('geoclustering');
+	module_load_include('inc','geo','includes/geo.api');
+	geo_delete(geo_load(array('name' => 'geoclustering_clusters')));
+	}
+?>

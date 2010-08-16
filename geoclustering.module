@@ -1,0 +1,839 @@
+<?php
+// $Id$
+
+global $geoclustering_pseudorandom_coeff;
+$geoclustering_pseudorandom_coeff=array();
+for ($lcs=0;count($geoclustering_pseudorandom_coeff) < 256;
+									$lcs=(($lcs * 0x6a85) + 37) & 32767) {
+	$value=1 + sqrt(($lcs >> 1)/16383) * 1.5 /*!!! make this configurable */;
+	if ($lcs & 1) {
+		$value=1.0 / $value;
+		}
+	$geoclustering_pseudorandom_coeff[]=$value;
+	}
+
+global $geoclustering_cos_table;
+$geoclustering_cos_table=array();
+for ($i=-180;$i <= 180;$i++) {
+	$geoclustering_cos_table[$i]=1.0 / max(0.1,cos($i/2*M_PI/180));
+	}
+
+function geoclustering_extract_coords_from_node(&$node,&$params)
+{
+	$location=$node->{$params->geofield_name}[0]['geo'];
+
+	//!!! switch to using content_format() once it starts working in Geo
+
+	$point=geo_wkb_get_data($location,'array');
+	if (!$point) {
+		$point=geo_wkb_get_data(pack('H*',$location),'array');
+		}
+
+	//!!! gracefully handle non-point geometries
+
+	$point=$point['value'];
+	return array($point['lon'],$point['lat']);
+	}
+
+function geoclustering_calc_cluster_idx($coords,&$params)
+{
+	global $geoclustering_pseudorandom_coeff;
+	global $geoclustering_cos_table;
+
+	if ($coords[0] < -180) {
+		$coords[0]=fmod($coords[0],360);
+		if ($coords[0] < -180) {
+			$coords[0]+=360;
+			}
+		}
+	elseif ($coords[0] >= 180) {
+		$coords[0]=fmod($coords[0],360);
+		if ($coords[0] >= 180) {
+			$coords[0]-=360;
+			}
+		}
+
+	$min_lon=-180;
+	$min_lat=-90;
+	$max_lon=+180;
+	$max_lat=+90;
+
+	$lat_lon_ratio=0.5;
+
+	$cluster_idx=0;
+	for ($i=$params->maxlevel-1;$i >= 0;$i--) {
+		$ratio=$lat_lon_ratio *
+					$geoclustering_cos_table[(integer)($max_lat+$min_lat)];
+
+		// if ($i <= 10) { print (($ratio >= 1) ? $ratio : (1.0/$ratio)) ."\n"; }
+
+		if ($ratio >= $geoclustering_pseudorandom_coeff[$cluster_idx & 255]) {
+			$coord_threshold=(	$min_lat +
+								$max_lat) / 2;
+			if ($coords[1] >= $coord_threshold) {
+				$min_lat=$coord_threshold;
+				$cluster_idx=($cluster_idx << 1) + 1;
+				}
+			else {
+				$max_lat=$coord_threshold;
+				$cluster_idx<<=1;
+				}
+			$lat_lon_ratio*=0.5;
+			}
+		else {
+			$coord_threshold=(	$min_lon +
+								$max_lon) / 2;
+			if ($coords[0] >= $coord_threshold) {
+				$min_lon=$coord_threshold;
+				$cluster_idx=($cluster_idx << 1) + 1;
+				}
+			else {
+				$max_lon=$coord_threshold;
+				$cluster_idx<<=1;
+				}
+			$lat_lon_ratio*=2;
+			}
+		}
+
+	return array($cluster_idx,array($min_lon,$min_lat,
+									$max_lon,$max_lat));
+	}
+
+function geoclustering_get_params_hash_sql($params)
+{
+	$params_array=array($params->geofield_name,
+						$params->maxlevel,
+						$params->node_conditions);
+	$hexdigest=substr(sha1(serialize($params_array)),0,8*2);
+
+		// Since PHP lacks a 64-bit integer type, this is a hack to
+		//   generate an SQL expression evaluating to a 64-bit integer
+
+	$startval='';
+	if (hexdec($hexdigest[0]) >= 8) {
+		$startval='-9223372036854775808+';
+		$hexdigest[0]=dechex(hexdec($hexdigest[0]) - 8);
+		}
+
+	return $startval .
+			hexdec(substr($hexdigest,16-6,6)) . '+' .
+			hexdec(substr($hexdigest,16-2*6,6)) . '*4294967296/16+' .
+			hexdec(substr($hexdigest,0,4)) . '*281474976710656';
+	}
+
+function geoclustering_test()	//!!!
+{
+	$params=array('maxlevel' => 22);
+	$results='';
+	for ($t=0;$t < 5;$t++) {
+		for ($i=-180;$i < 180;$i++) {
+			for ($j=-90;$j <= 90;$j++) {
+				$result=geoclustering_calc_cluster_idx(array($i,$j),$params);
+				if (!$t) {
+					$results.=" $result[0]";
+					}
+				}
+			}
+		}
+	print crc32($results) . "\n";
+	}
+
+function geoclustering_params_and_coords_for_node(&$node)
+{
+	$matching_params=array();
+
+	ctools_include('export');
+	foreach (ctools_export_load_object('geoclustering_tree_params')
+															as $params) {
+		$node_matches=TRUE;
+		if (isset($params->node_conditions)) {
+			foreach ($params->node_conditions as $field => $required_value) {
+				$value=is_array($node->{$field}) ?
+								$node->{$field}[0]['value'] : $node->{$field};
+				if ($value != $required_value) {
+					$node_matches=FALSE;
+					break;
+					}
+				}
+			}
+
+		if ($node_matches) {
+			$matching_params[geoclustering_get_params_hash_sql($params)]=
+					array($params,geoclustering_extract_coords_from_node(
+															$node,$params));
+			}
+		}
+
+	return $matching_params;
+	}
+
+class geoclustering_table_lock {
+	public function __construct($tablename) { db_lock_table($tablename); }
+	public function __destruct() { db_unlock_tables(); }
+	};
+
+function geoclustering_write_cluster_to_db($params_hash_sql,$level,$idx,
+						$longitude,$latitude,$nr_of_nodes,$summed_fields)
+{
+	$where_clause="WHERE params_hash=%s AND level=%d AND idx=%d";
+	$cluster_selection_params=array($params_hash_sql,$level,$idx);
+
+	if (!$nr_of_nodes) {
+		db_query("DELETE FROM {geoclustering_clusters} " . $where_clause,
+				$cluster_selection_params);
+		}
+	else {
+		$query_params=array_merge(
+				array($longitude,$latitude,$nr_of_nodes,$summed_fields),
+				$cluster_selection_params);
+		db_query("UPDATE {geoclustering_clusters} SET " .
+				"coords='POINT(%f %f)',nr_of_nodes=%d,summed_fields='%s' " .
+				$where_clause,$query_params);
+		if (!db_affected_rows()) {
+			db_query("INSERT INTO {geoclustering_clusters} " .
+					"(coords,nr_of_nodes,summed_fields," .
+					"params_hash,level,idx) " . 
+					"VALUES ('POINT(%f %f)',%d,'%s',%s,%d,%d)",
+					$query_params);
+			}
+		}
+	}
+
+function geoclustering_get_node_conditions(&$params)
+{
+	$retval=array();
+
+	if (isset($params->node_conditions)) {
+		$node_schema=drupal_get_schema('node');
+
+		foreach ($params->node_conditions as $field => $required_value) {
+
+				// Check if the field is in {node} table
+
+			if (isset($node_schema['fields'][$field])) {
+				$table="{node}";
+				$column=$field;
+				$column_type=$node_schema['fields'][$field]['type'];
+				}
+			else {
+					// If it wasn't, then find the field from CCK
+
+				$dbinfo=content_database_info(content_fields($field));
+
+				$table="{" . $dbinfo['table'] . "}";
+				foreach ($dbinfo['columns'] as $col => $colinfo) {
+					$column=$colinfo['column'];
+					$column_type=$colinfo['type'];
+					}
+				}
+
+			$retval[]=array('table' => $table,
+							'sql' => $table . "." . $column . " = " .
+										db_type_placeholder($column_type),
+							'param' => $required_value);
+			}
+		}
+
+	return $retval;
+	}
+
+function geoclustering_get_nodes_sql(&$params)
+{
+	$geofield_dbinfo=content_database_info(content_fields(
+											$params->geofield_name));
+	//!!! mis returnitakse, kui mitmel content typel on sama field?
+
+	$geofield_table="{" . $geofield_dbinfo['table'] . "}";
+	$sql="FROM {node} JOIN " . $geofield_table . " ON (" .
+								$geofield_table . ".vid={node}.vid)";
+
+	$joined_tables=array("{node}",$geofield_table);
+
+	$where_sql="";
+	$where_params=array();
+
+	foreach (geoclustering_get_node_conditions($params) as $clause) {
+		if (!in_array($clause['table'],$joined_tables)) {
+			$sql.=" JOIN " . $clause['table'] .
+							" ON (" . $clause['table'] . ".vid={node}.vid)";
+			$joined_tables[]=$clause['table'];
+			}
+		if ($where_sql) {
+			$where_sql.=" AND ";
+			}
+		$where_sql.=$clause['sql'];
+		$where_params[]=$clause['param'];
+		}
+
+	if ($where_sql) {
+		$where_sql=" WHERE " . $where_sql;
+		}
+
+	return array($sql . $where_sql,$where_params,
+				geo_load(array('table_name' => $geofield_dbinfo['table'])));
+	}
+
+function geoclustering_add_to_clusters(&$clusters,$row,$idx)
+{
+	if (!isset($clusters[$idx])) {
+		$clusters[$idx]=array(0.0,0.0,0,array());
+		}
+
+	$clusters[$idx][0]+=$row[0];
+	$clusters[$idx][1]+=$row[1];
+	$clusters[$idx][2]+=$row[2];
+	//!!! add to summed_fields
+	}
+
+function geoclustering_recalc_tree($params)
+{
+	watchdog('geoclustering',"Recalculating tree '!treename'",
+					array('!treename' => $params->name),WATCHDOG_NOTICE);
+
+		/******************************/
+		/*****                    *****/
+		/***** Read nodes from DB *****/
+		/*****                    *****/
+		/******************************/
+
+	$params_hash_sql=geoclustering_get_params_hash_sql($params);
+
+	list($sql_from,$query_params,$geo_handler)=
+									geoclustering_get_nodes_sql($params);
+
+	$txn=new geoclustering_table_lock('geoclustering_clusters');
+	$txn2=new geoclustering_table_lock('geoclustering_uptodate_trees');
+
+	$r=db_query("SELECT " .	$geo_handler->x($geo_handler) . " AS lon," .
+							$geo_handler->y($geo_handler) . " AS lat " .
+							$sql_from,
+				$query_params);
+
+	$clusters=array();
+	while ($row=db_fetch_array($r)) {
+		list($idx,$dummy)=geoclustering_calc_cluster_idx(
+							array($row['lon'],$row['lat']),$params);
+		geoclustering_add_to_clusters($clusters,
+				array($row['lon'],$row['lat'],1,''),	//!!! summed_fields
+				$idx);
+		}
+
+	$insert_rows=array();
+
+		/*****************************************************/
+		/*****                                           *****/
+		/***** Calculate parent clusters in cluster tree *****/
+		/*****                                           *****/
+		/*****************************************************/
+
+	$prev_level_rows=$insert_rows;
+	for ($level=$params->maxlevel;$level >= 0;$level--) {
+		$new_level_clusters=array();
+		foreach ($clusters as $idx => $cluster) {
+			$insert_rows[]=array(	$cluster[0] / max(1,$cluster[2]),
+									$cluster[1] / max(1,$cluster[2]),
+									$cluster[2],
+									'',		//!!! summed_fields
+									$params_hash_sql,
+									$level,
+									$idx);
+			geoclustering_add_to_clusters($new_level_clusters,
+													$cluster,$idx>>1);
+			}
+		$clusters=$new_level_clusters;
+		}
+
+		/********************************/
+		/*****                      *****/
+		/***** Write clusters to DB *****/
+		/*****                      *****/
+		/********************************/
+
+	db_query("DELETE FROM {geoclustering_clusters} WHERE params_hash=%s",
+													$params_hash_sql);
+	foreach ($insert_rows as $row) {
+			//!!! optimise this by combining several INSERTs into one
+		db_query("INSERT INTO {geoclustering_clusters} " .
+					"(coords,nr_of_nodes,summed_fields," .
+					"params_hash,level,idx) " . 
+					"VALUES ('POINT(%f %f)',%d,'%s',%s,%d,%d)",
+				$row);
+		}
+
+		/*********************************************/
+		/*****                                   *****/
+		/***** Mark the tree as up-to-date in DB *****/
+		/*****                                   *****/
+		/*********************************************/
+
+		// This is an atomic INSERT ... SELECT operation which works on
+		//   both PostgreSQL and MySQL
+
+	db_query("INSERT INTO {geoclustering_uptodate_trees} " .
+				"(params_hash) SELECT params_hash FROM " .
+				"(SELECT %s AS params_hash) AS t WHERE NOT EXISTS " .
+						"(SELECT * FROM {geoclustering_uptodate_trees} " .
+												"WHERE params_hash=%s)",
+				array($params_hash_sql,$params_hash_sql));
+	}
+
+function geoclustering_recalc_cluster($cluster_idx,$cluster_coords,
+												&$params,$params_hash_sql)
+{
+		/*****************************************/
+		/*****                               *****/
+		/***** Read $cluster_data from nodes *****/
+		/*****                               *****/
+		/*****************************************/
+
+	list($sql_from,$query_params,$geo_handler)=
+									geoclustering_get_nodes_sql($params);
+
+		//!!! add weight to avg_* (also in parent cluster recalculation)
+
+	$query="SELECT COUNT(*) AS nr_of_nodes," .
+			"AVG(" . $geo_handler->x($geo_handler) . ") AS avg_longitude," .
+			"AVG(" . $geo_handler->y($geo_handler) . ") AS avg_latitude " .
+			$sql_from . " AND " .
+			$geo_handler->intersects($geo_handler,
+					"POLYGON((%f %f,%f %f,%f %f,%f %f,%f %f))") . " AND " .
+			$geo_handler->x($geo_handler) . " < %f AND " .
+			$geo_handler->y($geo_handler) . " < %f";
+
+	foreach (array(0,1,2,1,2,3,0,3,0,1) as $i) {
+		$query_params[]=$cluster_coords[$i];
+		}
+
+	$query_params[]=$cluster_coords[2];
+	$query_params[]=$cluster_coords[3];
+
+	$txn=new geoclustering_table_lock('geoclustering_clusters');
+
+	$cluster_data=db_fetch_array(db_query($query,$query_params));
+
+		/***************************************************************/
+		/*****                                                     *****/
+		/***** Write $cluster_data to geoclustering_clusters table *****/
+		/*****                                                     *****/
+		/***************************************************************/
+
+	geoclustering_write_cluster_to_db($params_hash_sql,
+									$params->maxlevel,
+									$cluster_idx,
+									$cluster_data['avg_longitude'],
+									$cluster_data['avg_latitude'],
+									$cluster_data['nr_of_nodes'],
+									'');		//!!! fill in summed_fields
+
+		/******************************************************************/
+		/*****                                                        *****/
+		/***** Walk up in cluster tree, recalculating parent clusters *****/
+		/*****                                                        *****/
+		/******************************************************************/
+
+		//!!! This can be optimised so that all SELECTs are combined into one
+
+	$clusters_geo_handler=geo_load(array('name' => 'geoclustering_clusters'));
+
+	for ($level=$params->maxlevel-1;$level >= 0;$level--) {
+		$cluster_idx>>=1;
+
+		$r=db_query("SELECT " .
+				$clusters_geo_handler->x($clusters_geo_handler) .
+														" AS longitude," .
+				$clusters_geo_handler->y($clusters_geo_handler) .
+														" AS latitude," .
+				"nr_of_nodes,summed_fields " .
+				"FROM {geoclustering_clusters} " .
+				"WHERE params_hash=%s AND level=%d AND " .
+					"idx >= %d AND idx <= %d",
+				$params_hash_sql,
+				$level+1,
+				$cluster_idx*2,$cluster_idx*2+1);
+		$longitude_sum=0;
+		$latitude_sum=0;
+		$nr_of_nodes=0;
+		$summed_fields=array();
+		while ($row=db_fetch_array($r)) {
+			$longitude_sum+=$row['longitude'] * $row['nr_of_nodes'];
+			$latitude_sum +=$row['latitude' ] * $row['nr_of_nodes'];
+			$nr_of_nodes+=$row['nr_of_nodes'];
+			//!!! add to $summed_fields
+			}
+
+		geoclustering_write_cluster_to_db(
+									$params_hash_sql,
+									$level,
+									$cluster_idx,
+									$longitude_sum / max(1,$nr_of_nodes),
+									$latitude_sum  / max(1,$nr_of_nodes),
+									$nr_of_nodes,
+									'');		//!!! fill in summed_fields
+		}
+	}
+
+function geoclustering_is_possible_input_node(&$node)
+{	// Fast function to check whether the node could possibly be
+	//   a Geoclustering input node, based on immutable parts of node only
+
+    $field_types=array_keys(geo_field_types());
+	foreach (content_fields(NULL,$node->type) as $field) {
+        if (in_array($field['type'],$field_types)) {
+			return TRUE;
+			}
+		}
+	return FALSE;
+	}
+
+/**
+ * Implementation of hook_nodeapi()
+ */
+function geoclustering_nodeapi(&$node, $op)
+{
+	if ($op == 'presave') {
+
+		if (!geoclustering_is_possible_input_node($node)) {
+			return;
+			}
+
+			// This is a hack to detect node data changes during node update.
+			//   hook_nodeapi($op='presave') is invoked *before* node is
+			//   updated in DB, so we load the previous data from DB
+			//   at this point, and store them to
+			//   $node->geoclustering_prev_params where they apparently
+			//   cause no harm. Afterwards, hook_nodeapi($op='update')
+			//   is invoked *after* node is updated in DB, so then we have
+			//   both old data (in $node->geoclustering_prev_params) and
+			//   new data (in $node) available.
+
+		$node->geoclustering_prev_params=array();
+		if (!empty($node->nid)) {	// ignore inserts, process only updates
+			$node->geoclustering_prev_params=
+								geoclustering_params_and_coords_for_node(
+													node_load($node->nid));
+			}
+		}
+	elseif ($op == 'update' || $op == 'insert' || $op == 'delete') {
+
+			// For 'delete', 'presave' is not called and thus we have to
+			//   set $node->geoclustering_prev_params here
+
+		if ($op == 'delete' && geoclustering_is_possible_input_node($node)) {
+			$node->geoclustering_prev_params=array();
+			}
+
+		if (!isset($node->geoclustering_prev_params)) {
+			return;
+			}
+
+			// Delete all clusters in DB which are no longer active.
+			// Otherwise they would be incorrectly considered up-to-date
+			//   later, if they for some reason re-appear in exportables list
+
+		ctools_include('export');
+		$active_params_hash_sqls=array_map(
+					'geoclustering_get_params_hash_sql',
+					ctools_export_load_object('geoclustering_tree_params'));
+
+		$row=db_fetch_array(db_query("SELECT COUNT(*) AS cnt " .
+						"FROM {geoclustering_uptodate_trees} " .
+						"WHERE params_hash NOT IN (%s)",
+						implode(',',$active_params_hash_sqls)));
+		if ($row['cnt']) {
+			db_query("DELETE FROM {geoclustering_uptodate_trees} " .
+						"WHERE params_hash NOT IN (%s)",
+						implode(',',$active_params_hash_sqls));
+			db_query("DELETE FROM {geoclustering_clusters} " .
+						"WHERE params_hash NOT IN (%s)",
+						implode(',',$active_params_hash_sqls));
+			}
+
+		$clusters_recalculated=array();
+
+		foreach($node->geoclustering_prev_params as
+											$params_hash_sql => $info) {
+			list($params,$coords)=$info;
+			list($cluster_idx,$cluster_coords)=
+						geoclustering_calc_cluster_idx($coords,$params);
+			geoclustering_recalc_cluster($cluster_idx,$cluster_coords,
+												$params,$params_hash_sql);
+			$clusters_recalculated[$params_hash_sql]=$cluster_idx;
+			}
+
+		foreach (geoclustering_params_and_coords_for_node($node) as
+											$params_hash_sql => $info) {
+			list($params,$coords)=$info;
+			if (isset($node->geoclustering_prev_params[$params_hash_sql]) &&
+					$node->geoclustering_prev_params[$params_hash_sql][1] ==
+																$coords) {
+				continue;	// Already recalculated this cluster
+				}
+
+			list($cluster_idx,$cluster_coords)=
+							geoclustering_calc_cluster_idx($coords,$params);
+			if (isset($clusters_recalculated[$params_hash_sql]) &&
+							$clusters_recalculated[$params_hash_sql] ==
+															$cluster_idx) {
+				continue;	// Already recalculated this cluster
+				}
+			geoclustering_recalc_cluster($cluster_idx,$cluster_coords,
+												$params,$params_hash_sql);
+			}
+		}
+	}
+
+/**
+ * Implementation of hook_views_api()
+ */
+function geoclustering_views_api()
+{
+	return array('api' => 2);
+	}
+
+function geoclustering_apply_query_replacements($query_replacements,$str)
+{
+	foreach ($query_replacements as $pattern => $replacement) {
+		$str=preg_replace('|(?<![a-zA-Z0-9_])' .
+							preg_quote($pattern) . '(?![a-zA-Z0-9_])|',
+							$replacement,$str);
+		}
+	return $str;
+	}
+
+/**
+ * Implementation of hook_views_query_alter()
+ */
+function geoclustering_views_query_alter(&$view,&$query)
+{
+		//!!! do recalc check also when using geoclustering_clusters as base table
+
+	$tree_name=NULL;
+	$level=NULL;
+	foreach ($view->argument as $arg) {
+		if (isset($arg->geoclustering_tree_name)) {
+
+				// So this is a Geoclustering view that we should modify
+
+			$tree_name=$arg->geoclustering_tree_name;
+			$level=$arg->geoclustering_level;
+			}
+		}
+
+	if ($tree_name === NULL) {
+		return;
+		}
+
+	ctools_include('export');
+	$ctools_objects=ctools_export_load_object('geoclustering_tree_params',
+												'names',array($tree_name));
+	if (empty($ctools_objects)) {
+		watchdog('geoclustering',"View '!viewname' settings specify " .
+						"nonexistent Geoclustering tree name '!treename'",
+						array(	'!viewname' => $view->name,
+								'!treename' => $tree_name),
+						WATCHDOG_ERROR);
+		drupal_not_found();	//!!! Find a better way to fail. This one
+							//		still executes the Views DB query
+		return;
+		}
+
+	$params=array_pop($ctools_objects);
+	$params_hash_sql=geoclustering_get_params_hash_sql($params);
+
+	if ($level > $params->maxlevel) {
+		$level=-2;
+		}
+
+	if ($level != -2) {		// Do this always except when argument specifies
+							//  that view should always return nodes
+
+			/**************************************/
+			/*****                            *****/
+			/***** Recalculate tree if needed *****/
+			/*****                            *****/
+			/**************************************/
+
+		$row=db_fetch_array(db_query("SELECT COUNT(*) AS cnt " .
+								"FROM {geoclustering_uptodate_trees} " .
+								"WHERE params_hash=%s",$params_hash_sql));
+		if (!$row['cnt']) {
+			geoclustering_recalc_tree($params);
+			}
+
+			/************************************************/
+			/*****                                      *****/
+			/***** Get WHERE clauses from original View *****/
+			/*****                                      *****/
+			/************************************************/
+
+		$where_clauses=array();
+		$where_args=array();
+
+		$geofield_dbinfo=content_database_info(content_fields(
+												$params->geofield_name));
+
+		$query_replacements=array(
+				$geofield_dbinfo['table'] => 'geoclustering_clusters',
+				$geofield_dbinfo['columns']['geo']['column'] => 'coords',
+				);
+
+		foreach ($query->table_queue as $id => $tabledef) {
+			if ($tabledef['join']->table == $geofield_dbinfo['table']) {
+				$query_replacements[$id]='geoclustering_clusters';
+				}
+			}
+
+		foreach ($query->where as $clauses) {
+			foreach ($clauses['clauses'] as $clause) {
+				$where_clauses[]=geoclustering_apply_query_replacements(
+											$query_replacements,$clause);
+				}
+			$where_args=array_merge($where_args,$clauses['args']);
+			}
+		}
+
+	if ($level == -1) {		// Do this when argument specifies "level=auto"
+		$max_results=$view->pager['items_per_page'];
+		if (empty($max_results)) {
+			$max_results=1000;
+			}
+
+			/********************************************************/
+			/*****                                              *****/
+			/***** Find max level that has <= $max_results rows *****/
+			/*****                                              *****/
+			/********************************************************/
+
+		$level=0;
+		$this_level_clusters=1;
+		$this_level_nodes=1;
+
+		while ($level < $params->maxlevel &&
+									$this_level_clusters < $max_results) {
+			for ($level_increment=0;
+						$level+$level_increment+1 < $params->maxlevel && 
+						max($this_level_clusters,$level ? 20 : 0) <<
+								($level_increment+1) <= $max_results/1.3;) {
+				$level_increment++;
+				}
+
+			$level+=$level_increment;
+
+			$q="SELECT level,COUNT(*) AS nr_of_clusters," .
+						"SUM(nr_of_nodes) AS sum_nr_of_nodes " .
+					"FROM {geoclustering_clusters} " .
+					"WHERE params_hash=%s AND level >= %d AND level <= %d";
+			foreach ($where_clauses as $clause) {
+				$q.=" AND (" . $clause . ")";
+				}
+			$q.=" GROUP BY level ORDER BY level";
+
+			$max_query_level=min($params->maxlevel,$level+1+4-1);
+
+			$r=db_query($q,array_merge(
+						array($params_hash_sql,$level+1,$max_query_level),
+						$where_args));
+			while ($row=db_fetch_array($r)) {
+				$level=$row['level'];
+				$this_level_clusters=$row['nr_of_clusters'];
+				$this_level_nodes=$row['sum_nr_of_nodes'];
+
+				if ($this_level_clusters >= $max_results) {
+					break;
+					}
+				}
+
+			if ($level < $max_query_level &&
+									$this_level_clusters < $max_results) {
+				$level=$max_query_level;
+				}
+			}
+
+		if ($this_level_clusters > $max_results) {
+			$level--;
+			}
+
+		if ($level >= $params->maxlevel &&
+									$this_level_nodes <= $max_results) {
+			$level=-2;
+			}
+
+		//!!! Issue a warning if query has components not supported by
+		// Geoclustering (groupby's, inner joins, extra filters,
+		// OR filters, distinct fields, count fields, or
+		// other aggregate fields)
+		}
+
+	if ($level == -2) {
+		//!!! Wildcards must be disabled in argument handler
+
+		foreach (geoclustering_get_node_conditions($params) as $clause) {
+			$query->add_where($clause['table'],$clause['sql'],
+														$clause['param']);
+			}
+
+		//!!! add WHERE clause "geofield IS NOT NULL"
+
+			// Remove fields coming from dummy join of {node} to
+			//   geoclustering_clusters table. Our dummy join handler
+			//   generates no SQL for this join, and thus the fields must
+			//   be removed too, to prevent SQL errors
+
+		foreach ($query->fields as $idx => $field_def) {
+			if ($field_def['table'] == 'geoclustering_clusters') {
+				$query->fields[$idx]['field']='NULL';
+				$query->fields[$idx]['table']='';
+				}
+			}
+
+		return;
+		}
+
+		/*******************************************************************/
+		/*****                                                         *****/
+		/***** Rewrite query to read from geoclustering_clusters table *****/
+		/*****                                                         *****/
+		/*******************************************************************/
+
+	$orig_fields=$query->fields;
+
+	$view->query=new views_query('geoclustering_clusters','cluster_id');
+	foreach ($where_clauses as $idx => $clause) {
+		$view->query->add_where(NULL,$clause,(!$idx) ? $where_args : array());
+		}
+
+	$view->query->add_where(NULL,"params_hash = %s",$params_hash_sql);
+	$view->query->add_where(NULL,"level = %d",$level);
+
+	foreach ($orig_fields as $field_def) {
+		if (empty($field_def['table'])) {
+			$field=geoclustering_apply_query_replacements(
+								$query_replacements,$field_def['field']);
+			if ($field != $field_def['field']) {
+				$view->query->add_field($field_def['table'],$field,
+													$field_def['alias']);
+				continue;
+				}
+			}
+
+		if ($field_def['table'] == 'node' && $field_def['field'] == nid) {
+			$view->query->add_field('geoclustering_clusters','idx',
+													$field_def['alias']);
+			continue;
+			}
+
+		if ($field_def['table'] == 'geoclustering_clusters') {
+			$view->query->add_field($field_def['table'],$field_def['field'],
+													$field_def['alias']);
+			continue;
+			}
+
+		/*!!! handle CCK fields corresponding to summed_fields:
+			[field] => field_diameter_value
+			[table] => node_data_field_diameter
+			[alias] => node_data_field_diameter_field_diameter_value
+
+			SUBSTRING('11 222 333' FROM (POSITION(' ' in '11 222 333')+1))
+			*/
+		}
+	}
