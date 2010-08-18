@@ -62,11 +62,19 @@ Geoclustering trees configuration
 ---------------------------------
 After installation, you should define a Geoclustering tree. Geoclustering
 has no UI yet, so this is currently only possible programmatically.
-Tree parameters are exportables and you can define them via
+Tree parameters are ctools exportables and you can define them via
 hook_geoclustering_tree_params(). Example code in mymodule.module:
+
+function mymodule_ctools_plugin_api($module, $api) {
+  if ($module == "geoclustering_tree_params" &&
+								$api == "geoclustering_tree_params") {
+    return array('version' => 1);
+  }
+}
 
 function mymodule_geoclustering_tree_params() {
   $tree=new stdClass();
+  $tree->api_version = 1;
   $tree->name = 'mymodule_tree';
   $tree->description = 'Mymodule Geoclustering tree';
   $tree->maxlevel = 27;
