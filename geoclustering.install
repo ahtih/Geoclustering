@@ -85,7 +85,8 @@ function geoclustering_schema()
 			'fields' => array(
 				'name' => array(
 					'description' => 'Machine-readable unique tree name',
-					'type' => 'text',
+					'type' => 'varchar', // MySQL forbids indexed TEXT fields
+					'length' => 64,
 					'not null' => TRUE,
 					),
 				'description' => array(
