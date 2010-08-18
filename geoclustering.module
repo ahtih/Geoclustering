@@ -1,23 +1,6 @@
 <?php
 // $Id$
 
-global $geoclustering_pseudorandom_coeff;
-$geoclustering_pseudorandom_coeff=array();
-for ($lcs=0;count($geoclustering_pseudorandom_coeff) < 256;
-									$lcs=(($lcs * 0x6a85) + 37) & 32767) {
-	$value=1 + sqrt(($lcs >> 1)/16383) * 1.5 /*!!! make this configurable */;
-	if ($lcs & 1) {
-		$value=1.0 / $value;
-		}
-	$geoclustering_pseudorandom_coeff[]=$value;
-	}
-
-global $geoclustering_cos_table;
-$geoclustering_cos_table=array();
-for ($i=-180;$i <= 180;$i++) {
-	$geoclustering_cos_table[$i]=1.0 / max(0.1,cos($i/2*M_PI/180));
-	}
-
 function geoclustering_extract_coords_from_node(&$node,&$params)
 {
 	$location=$node->{$params->geofield_name}[0]['geo'];
@@ -37,8 +20,36 @@ function geoclustering_extract_coords_from_node(&$node,&$params)
 
 function geoclustering_calc_cluster_idx($coords,&$params)
 {
-	global $geoclustering_pseudorandom_coeff;
-	global $geoclustering_cos_table;
+		/***********************************/
+		/*****                         *****/
+		/***** Calculate static tables *****/
+		/*****                         *****/
+		/***********************************/
+
+	static $geoclustering_pseudorandom_coeff;
+	static $geoclustering_cos_table;
+	if (!isset($geoclustering_pseudorandom_coeff)) {
+		$geoclustering_pseudorandom_coeff=array();
+		for ($lcs=0;count($geoclustering_pseudorandom_coeff) < 256;
+									$lcs=(($lcs * 0x6a85) + 37) & 32767) {
+			$value=1 + sqrt(($lcs >> 1)/16383) * 1.5 /*!!! make this configurable */;
+			if ($lcs & 1) {
+				$value=1.0 / $value;
+				}
+			$geoclustering_pseudorandom_coeff[]=$value;
+			}
+
+		$geoclustering_cos_table=array();
+		for ($i=-180;$i <= 180;$i++) {
+			$geoclustering_cos_table[$i]=1.0 / max(0.1,cos($i/2*M_PI/180));
+			}
+		}
+
+		/*******************************/
+		/*****                     *****/
+		/***** Normalize $coords[] *****/
+		/*****                     *****/
+		/*******************************/
 
 	if ($coords[0] < -180) {
 		$coords[0]=fmod($coords[0],360);
@@ -52,6 +63,12 @@ function geoclustering_calc_cluster_idx($coords,&$params)
 			$coords[0]-=360;
 			}
 		}
+
+		/*********************/
+		/*****           *****/
+		/***** Main loop *****/
+		/*****           *****/
+		/*********************/
 
 	$min_lon=-180;
 	$min_lat=-90;
