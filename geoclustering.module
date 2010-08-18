@@ -551,18 +551,17 @@ function geoclustering_nodeapi(&$node, $op)
 		$active_params_hash_sqls=array_map(
 					'geoclustering_get_params_hash_sql',
 					ctools_export_load_object('geoclustering_tree_params'));
-
+		$sql_where="";
+		if ($active_params_hash_sqls) {
+			$sql_where=" WHERE params_hash NOT IN (" .
+							implode(',',$active_params_hash_sqls) . ")";
+			}
 		$row=db_fetch_array(db_query("SELECT COUNT(*) AS cnt " .
-						"FROM {geoclustering_uptodate_trees} " .
-						"WHERE params_hash NOT IN (%s)",
-						implode(',',$active_params_hash_sqls)));
+						"FROM {geoclustering_uptodate_trees}" . $sql_where));
 		if ($row['cnt']) {
-			db_query("DELETE FROM {geoclustering_uptodate_trees} " .
-						"WHERE params_hash NOT IN (%s)",
-						implode(',',$active_params_hash_sqls));
-			db_query("DELETE FROM {geoclustering_clusters} " .
-						"WHERE params_hash NOT IN (%s)",
-						implode(',',$active_params_hash_sqls));
+			db_query("DELETE FROM {geoclustering_uptodate_trees}" .
+																$sql_where);
+			db_query("DELETE FROM {geoclustering_clusters}" . $sql_where);
 			}
 
 		$clusters_recalculated=array();
