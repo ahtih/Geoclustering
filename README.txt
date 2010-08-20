@@ -140,8 +140,8 @@ Map display configuration
 If using OpenLayers, you should probably implement
 hook_openlayers_layer_types() to add a custom "Layer type" which uses
 your geodata protocol (e.g. WFS) and OpenLayers.Strategy.BBOX. This needs
-ca 100 lines PHP + 30 lines JavaScript; see docs/LAYER_TYPES.txt in
-OpenLayers module.
+ca 100 lines PHP + 30 lines JavaScript; see http://drupal.org/node/629928
+and docs/LAYER_TYPES.txt in OpenLayers module.
 
 Maintainers
 -----------
