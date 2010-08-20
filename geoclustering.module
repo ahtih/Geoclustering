@@ -185,9 +185,72 @@ function geoclustering_params_and_coords_for_node(&$node)
 	}
 
 class geoclustering_table_lock {
-	public function __construct($tablename) { db_lock_table($tablename); }
-	public function __destruct() { db_unlock_tables(); }
+	public function __construct($write_tables,$read_tables=array())
+		{
+				// Input table names must be safe (no user input there)
+				//   and in {...}
+
+			global $db_type;
+			$query="";
+
+			if ($db_type == 'pgsql') {
+				$query="BEGIN; LOCK TABLE";
+				$delimiter=" ";
+				foreach ($write_tables as $table) {
+					$query.=$delimiter . $table;
+					$delimiter=",";
+					}
+				$query.=" IN ACCESS EXCLUSIVE MODE";
+				}
+			else {
+				$query="LOCK TABLES";
+				$delimiter=" ";
+				foreach ($write_tables as $table) {
+					$query.=$delimiter . $table . " WRITE";
+					$delimiter=",";
+					}
+				foreach ($read_tables as $table) {
+					if (!in_array($table,$write_tables)) {
+						$query.=$delimiter . $table . " READ";
+						$delimiter=",";
+						}
+					}
+				}
+
+			db_query($query);
+			}
+
+	public function __destruct()
+		{
+			global $db_type;
+			db_query(($db_type == 'pgsql') ? "COMMIT" : "UNLOCK TABLES");
+			}
 	};
+
+/*!!! On non-MyISAM databases, use transactions and row-level locking
+
+geoclustering_recalc_tree:
+	pgsql: BEGIN
+	pgsql: LOCK TABLE {geoclustering_clusters} IN EXCLUSIVE MODE
+	mysql: LOCK TABLE {geoclustering_clusters} WRITE,
+						{geoclustering_uptodate_trees} WRITE,
+						{node} ... READ
+	SELECT FROM node+joins
+	DELETE FROM {geoclustering_clusters}
+	INSERT INTO {geoclustering_clusters}
+	INSERT INTO {geoclustering_uptodate_trees} ... SELECT ...
+	pgsql: COMMIT
+
+geoclustering_recalc_cluster optimised:
+	BEGIN
+	SELECT FROM node+joins
+	SELECT ... FROM {geoclustering_clusters} FOR UPDATE
+	if {
+		INSERT INTO {geoclustering_clusters}
+		}
+	UPDATE {geoclustering_clusters}
+	COMMIT
+	*/
 
 function geoclustering_write_cluster_to_db($params_hash_sql,$level,$idx,
 						$longitude,$latitude,$nr_of_nodes,$summed_fields)
@@ -286,7 +349,7 @@ function geoclustering_get_nodes_sql(&$params)
 		$where_sql=" WHERE " . $where_sql;
 		}
 
-	return array($sql . $where_sql,$where_params,
+	return array($sql . $where_sql,$where_params,$joined_tables,
 				geo_load(array('table_name' => $geofield_dbinfo['table'])));
 	}
 
@@ -315,11 +378,12 @@ function geoclustering_recalc_tree($params)
 
 	$params_hash_sql=geoclustering_get_params_hash_sql($params);
 
-	list($sql_from,$query_params,$geo_handler)=
+	list($sql_from,$query_params,$tables,$geo_handler)=
 									geoclustering_get_nodes_sql($params);
 
-	$txn=new geoclustering_table_lock('geoclustering_clusters');
-	$txn2=new geoclustering_table_lock('geoclustering_uptodate_trees');
+	$txn=new geoclustering_table_lock(array('{geoclustering_clusters}',
+										'{geoclustering_uptodate_trees}'),
+									$tables);
 
 	$r=db_query("SELECT " .	$geo_handler->x($geo_handler) . " AS lon," .
 							$geo_handler->y($geo_handler) . " AS lat " .
@@ -403,7 +467,7 @@ function geoclustering_recalc_cluster($cluster_idx,$cluster_coords,
 		/*****                               *****/
 		/*****************************************/
 
-	list($sql_from,$query_params,$geo_handler)=
+	list($sql_from,$query_params,$tables,$geo_handler)=
 									geoclustering_get_nodes_sql($params);
 
 		//!!! add weight to avg_* (also in parent cluster recalculation)
@@ -424,7 +488,8 @@ function geoclustering_recalc_cluster($cluster_idx,$cluster_coords,
 	$query_params[]=$cluster_coords[2];
 	$query_params[]=$cluster_coords[3];
 
-	$txn=new geoclustering_table_lock('geoclustering_clusters');
+	$txn=new geoclustering_table_lock(array('{geoclustering_clusters}'),
+									$tables);
 
 	$cluster_data=db_fetch_array(db_query($query,$query_params));
 
