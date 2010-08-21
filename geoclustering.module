@@ -381,9 +381,11 @@ function geoclustering_recalc_tree($params)
 	list($sql_from,$query_params,$tables,$geo_handler)=
 									geoclustering_get_nodes_sql($params);
 
-	$txn=new geoclustering_table_lock(array('{geoclustering_clusters}',
+	$txn=new geoclustering_table_lock(
+						array('{geoclustering_clusters}',
 										'{geoclustering_uptodate_trees}'),
-									$tables);
+						array_merge($tables,
+							array('geoclustering_uptodate_trees_select')));
 
 	$r=db_query("SELECT " .	$geo_handler->x($geo_handler) . " AS lon," .
 							$geo_handler->y($geo_handler) . " AS lat " .
@@ -454,6 +456,7 @@ function geoclustering_recalc_tree($params)
 				"(params_hash) SELECT params_hash FROM " .
 				"(SELECT %s AS params_hash) AS t WHERE NOT EXISTS " .
 						"(SELECT * FROM {geoclustering_uptodate_trees} " .
+							"AS geoclustering_uptodate_trees_select " .
 												"WHERE params_hash=%s)",
 				array($params_hash_sql,$params_hash_sql));
 	}
