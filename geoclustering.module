@@ -187,16 +187,26 @@ function geoclustering_params_and_coords_for_node(&$node)
 class geoclustering_table_lock {
 	public function __construct($write_tables,$read_tables=array())
 		{
-				// Input table names must be safe (no user input there)
-				//   and in {...}
+				// Input table names and aliases must be safe (no user
+				//   input there) and in {...}
 
 			global $db_type;
-			$query="";
+
+			foreach (array_keys($write_tables) as $alias) {
+				if (!$write_tables[$alias]) {
+					$write_tables[$alias]=$alias;
+					}
+				}
+			foreach (array_keys($read_tables) as $alias) {
+				if (!$read_tables[$alias]) {
+					$read_tables[$alias]=$alias;
+					}
+				}
 
 			if ($db_type == 'pgsql') {
 				$query="BEGIN; LOCK TABLE";
 				$delimiter=" ";
-				foreach ($write_tables as $table) {
+				foreach (array_unique(array_values($write_tables)) as $table) {
 					$query.=$delimiter . $table;
 					$delimiter=",";
 					}
@@ -205,12 +215,18 @@ class geoclustering_table_lock {
 			else {
 				$query="LOCK TABLES";
 				$delimiter=" ";
-				foreach ($write_tables as $table) {
+				foreach ($write_tables as $alias => $table) {
+					if ($alias != $table) {
+						$table.=" AS " . $alias;
+						}
 					$query.=$delimiter . $table . " WRITE";
 					$delimiter=",";
 					}
-				foreach ($read_tables as $table) {
-					if (!in_array($table,$write_tables)) {
+				foreach ($read_tables as $alias => $table) {
+					if (!in_array($alias,$write_tables)) {
+						if ($alias != $table) {
+							$table.=" AS " . $alias;
+							}
 						$query.=$delimiter . $table . " READ";
 						$delimiter=",";
 						}
@@ -382,10 +398,11 @@ function geoclustering_recalc_tree($params)
 									geoclustering_get_nodes_sql($params);
 
 	$txn=new geoclustering_table_lock(
-						array('{geoclustering_clusters}',
-										'{geoclustering_uptodate_trees}'),
-						array_merge($tables,
-							array('geoclustering_uptodate_trees_select')));
+					array(	'{geoclustering_clusters}' => '',
+							'{geoclustering_uptodate_trees}' => ''),
+					array_merge(array_combine($tables,$tables),
+						array('{geoclustering_uptodate_trees_select}' =>
+										'{geoclustering_uptodate_trees}')));
 
 	$r=db_query("SELECT " .	$geo_handler->x($geo_handler) . " AS lon," .
 							$geo_handler->y($geo_handler) . " AS lat " .
@@ -491,8 +508,8 @@ function geoclustering_recalc_cluster($cluster_idx,$cluster_coords,
 	$query_params[]=$cluster_coords[2];
 	$query_params[]=$cluster_coords[3];
 
-	$txn=new geoclustering_table_lock(array('{geoclustering_clusters}'),
-									$tables);
+	$txn=new geoclustering_table_lock(array('{geoclustering_clusters}' => ''),
+									array_combine($tables,$tables));
 
 	$cluster_data=db_fetch_array(db_query($query,$query_params));
 
