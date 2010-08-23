@@ -213,6 +213,14 @@ class geoclustering_table_lock {
 				$query.=" IN ACCESS EXCLUSIVE MODE";
 				}
 			else {
+					// MySQL
+
+					// MySQL LOCK TABLES does not allow access to any other
+					//  table than the locked tables, so we lock {watchdog}
+					//  just in case to not disturb error logging
+
+				$write_tables['{watchdog}']='{watchdog}';
+
 				$query="LOCK TABLES";
 				$delimiter=" ";
 				foreach ($write_tables as $alias => $table) {
