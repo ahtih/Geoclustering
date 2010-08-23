@@ -410,7 +410,8 @@ function geoclustering_recalc_tree($params)
 							'{geoclustering_uptodate_trees}' => ''),
 					array_merge(array_combine($tables,$tables),
 						array('{geoclustering_uptodate_trees_select}' =>
-										'{geoclustering_uptodate_trees}')));
+										'{geoclustering_uptodate_trees}',
+								'{geo}' => '')));
 
 	$r=db_query("SELECT " .	$geo_handler->x($geo_handler) . " AS lon," .
 							$geo_handler->y($geo_handler) . " AS lat " .
@@ -517,7 +518,8 @@ function geoclustering_recalc_cluster($cluster_idx,$cluster_coords,
 	$query_params[]=$cluster_coords[3];
 
 	$txn=new geoclustering_table_lock(array('{geoclustering_clusters}' => ''),
-									array_combine($tables,$tables));
+							array_merge(array_combine($tables,$tables),
+												array('{geo}' => '')));
 
 	$cluster_data=db_fetch_array(db_query($query,$query_params));
 
