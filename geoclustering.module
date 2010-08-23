@@ -285,7 +285,8 @@ geoclustering_recalc_cluster optimised:
 	*/
 
 function geoclustering_write_cluster_to_db($params_hash_sql,$level,$idx,
-						$longitude,$latitude,$nr_of_nodes,$summed_fields)
+						$longitude,$latitude,$nr_of_nodes,$summed_fields,
+						$clusters_geo_handler)
 {
 	$where_clause="WHERE params_hash=%s AND level=%d AND idx=%d";
 	$cluster_selection_params=array($params_hash_sql,$level,$idx);
@@ -296,16 +297,20 @@ function geoclustering_write_cluster_to_db($params_hash_sql,$level,$idx,
 		}
 	else {
 		$query_params=array_merge(
-				array($longitude,$latitude,$nr_of_nodes,$summed_fields),
-				$cluster_selection_params);
+					array($nr_of_nodes,$summed_fields),
+					$cluster_selection_params);
 		db_query("UPDATE {geoclustering_clusters} SET " .
-				"coords='POINT(%f %f)',nr_of_nodes=%d,summed_fields='%s' " .
+				"coords=" .
+						$clusters_geo_handler->point($longitude,$latitude) .
+				",nr_of_nodes=%d,summed_fields='%s' " .
 				$where_clause,$query_params);
 		if (!db_affected_rows()) {
 			db_query("INSERT INTO {geoclustering_clusters} " .
 					"(coords,nr_of_nodes,summed_fields," .
 					"params_hash,level,idx) " . 
-					"VALUES ('POINT(%f %f)',%d,'%s',%s,%d,%d)",
+					"VALUES (" .
+						$clusters_geo_handler->point($longitude,$latitude) .
+						",%d,'%s',%s,%d,%d)",
 					$query_params);
 			}
 		}
@@ -402,6 +407,8 @@ function geoclustering_recalc_tree($params)
 	watchdog('geoclustering',"Recalculating tree '!treename'",
 					array('!treename' => $params->name),WATCHDOG_NOTICE);
 
+	$clusters_geo_handler=geo_load(array('name' => 'geoclustering_clusters'));
+
 		/******************************/
 		/*****                    *****/
 		/***** Read nodes from DB *****/
@@ -443,17 +450,16 @@ function geoclustering_recalc_tree($params)
 		/*****                                           *****/
 		/*****************************************************/
 
-	$prev_level_rows=$insert_rows;
 	for ($level=$params->maxlevel;$level >= 0;$level--) {
 		$new_level_clusters=array();
 		foreach ($clusters as $idx => $cluster) {
-			$insert_rows[]=array(	$cluster[0] / max(1,$cluster[2]),
-									$cluster[1] / max(1,$cluster[2]),
-									$cluster[2],
-									'',		//!!! summed_fields
-									$params_hash_sql,
-									$level,
-									$idx);
+			$insert_rows[]=array(	array(	$cluster[0] / max(1,$cluster[2]),
+											$cluster[1] / max(1,$cluster[2])),
+									array(	$cluster[2],
+											'',		//!!! summed_fields
+											$params_hash_sql,
+											$level,
+											$idx));
 			geoclustering_add_to_clusters($new_level_clusters,
 													$cluster,$idx>>1);
 			}
@@ -473,8 +479,10 @@ function geoclustering_recalc_tree($params)
 		db_query("INSERT INTO {geoclustering_clusters} " .
 					"(coords,nr_of_nodes,summed_fields," .
 					"params_hash,level,idx) " . 
-					"VALUES ('POINT(%f %f)',%d,'%s',%s,%d,%d)",
-				$row);
+					"VALUES (" .
+						$clusters_geo_handler->point($row[0][0],$row[0][1]) .
+						",%d,'%s',%s,%d,%d)",
+				$row[1]);
 		}
 
 		/*********************************************/
@@ -525,9 +533,10 @@ function geoclustering_recalc_cluster($cluster_idx,$cluster_coords,
 	$query_params[]=$cluster_coords[2];
 	$query_params[]=$cluster_coords[3];
 
+	$clusters_geo_handler=geo_load(array('name' => 'geoclustering_clusters'));
+
 	$txn=new geoclustering_table_lock(array('{geoclustering_clusters}' => ''),
-							array_merge(array_combine($tables,$tables),
-												array('{geo}' => '')));
+											array_combine($tables,$tables));
 
 	$cluster_data=db_fetch_array(db_query($query,$query_params));
 
@@ -543,7 +552,8 @@ function geoclustering_recalc_cluster($cluster_idx,$cluster_coords,
 									$cluster_data['avg_longitude'],
 									$cluster_data['avg_latitude'],
 									$cluster_data['nr_of_nodes'],
-									'');		//!!! fill in summed_fields
+									'',		//!!! fill in summed_fields
+									$clusters_geo_handler);
 
 		/******************************************************************/
 		/*****                                                        *****/
@@ -552,8 +562,6 @@ function geoclustering_recalc_cluster($cluster_idx,$cluster_coords,
 		/******************************************************************/
 
 		//!!! This can be optimised so that all SELECTs are combined into one
-
-	$clusters_geo_handler=geo_load(array('name' => 'geoclustering_clusters'));
 
 	for ($level=$params->maxlevel-1;$level >= 0;$level--) {
 		$cluster_idx>>=1;
@@ -588,7 +596,8 @@ function geoclustering_recalc_cluster($cluster_idx,$cluster_coords,
 									$longitude_sum / max(1,$nr_of_nodes),
 									$latitude_sum  / max(1,$nr_of_nodes),
 									$nr_of_nodes,
-									'');		//!!! fill in summed_fields
+									'',		//!!! fill in summed_fields
+									$clusters_geo_handler);
 		}
 	}
 

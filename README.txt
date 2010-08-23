@@ -54,6 +54,7 @@ in the modules directory for your site and enable it on the
 Geo needs the following patches for Geoclustering to really work:
 - http://drupal.org/files/issues/geo-filter-float.patch
 - http://drupal.org/files/issues/geo-ewkb-parsing.patch
+- http://drupal.org/files/issues/geo-883032.patch
 
 If using WFS module, this also needs patching to support BBOX requests:
 - http://drupal.org/files/issues/wfs-filter-changes.patch
