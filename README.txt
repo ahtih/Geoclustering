@@ -81,6 +81,7 @@ function mymodule_geoclustering_tree_params() {
   $tree->maxlevel = 27;
   $tree->geofield_name = 'field_mycoordsfield';
   $tree->node_conditions = array('type' => 'mynodetype', 'status' => 1);
+  $tree->summed_field_names = array('field_population', 'field_area');
   return array($tree->name => $tree);
 }
 
@@ -101,6 +102,12 @@ Parameters are:
 	'status' => 1, 'field_placemark_type' => 'school').
 - geofield_name: CCK field name that stores Node coordinates for nodes
 	that match node_conditions.
+- summed_field_names: PHP array of CCK field names of numeric fields of
+	input nodes. These fields are replicated from input nodes to clusters,
+	so that values for each cluster are sums of values of its child nodes.
+	Thus tree root node fields have sums of fields of all input nodes.
+	Cluster fields have same types as node fields, thus for integer fields
+	overflow could happen.
 
 You can have multiple trees defined. When tree parameters are added or
 modified, Geoclustering automatically recalculates the clustering tree

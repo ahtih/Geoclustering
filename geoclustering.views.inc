@@ -34,12 +34,13 @@ function geoclustering_views_data()
 	'params_hash' => array('title' => t('Clustering id'),
 		'help' => t('Clustering ID defining a particular set of clusters'),
 		'filter' => array('handler' => 'views_handler_filter_equality')),
-					//!!! should eliminate 'Is not equal to' operator here
+			//!!! should eliminate 'Is not equal to' operator here
+			//!!! change this to tree name filter/argument handler instead
 
 	'level' => array('title' => t('Tree level'),
-		'help' => t('Tree level in a paricular Clustering'),
+		'help' => t('Tree level in a particular Clustering'),
 		'filter' => array('handler' => 'views_handler_filter_equality')),
-					//!!! should eliminate 'Is not equal to' operator here
+			//!!! should eliminate 'Is not equal to' operator here
 
 	'idx' => array('title' => t('Cluster idx'),
 		'help' => t('Cluster idx'),

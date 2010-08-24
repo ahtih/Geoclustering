@@ -132,6 +132,19 @@ function geoclustering_schema()
 					'type' => 'text',
 					'serialize' => TRUE,
 					),
+				'summed_field_names' => array(
+					'description' => 'PHP array of CCK field names of ' .
+							'numeric fields of input nodes. These fields ' .
+							'are replicated from input nodes to ' .
+							'clusters, so that values for each cluster ' .
+							'are sums of values of its child nodes. ' .
+							'Cluster fields have same types as node ' .
+							'fields, thus for integer fields overflow ' .
+							'could happen. Example: ' .
+							"array('field_population', 'field_area').",
+					'type' => 'text',
+					'serialize' => TRUE,
+					),
 				),
 			'primary key' => array('name'),
 			),

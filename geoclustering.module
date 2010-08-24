@@ -128,7 +128,8 @@ function geoclustering_get_params_hash_sql($params)
 {
 	$params_array=array($params->geofield_name,
 						$params->maxlevel,
-						$params->node_conditions);
+						$params->node_conditions,
+						$params->summed_field_names);
 	$hexdigest=substr(sha1(serialize($params_array)),0,8*2);
 
 		// Since PHP lacks a 64-bit integer type, this is a hack to
@@ -322,17 +323,38 @@ function geoclustering_get_node_conditions(&$params)
 	return $retval;
 	}
 
-function geoclustering_get_nodes_sql(&$params)
+function geoclustering_get_summed_fields_info(&$params)
+{
+	$retval=array();
+
+	foreach (($params->summed_field_names ?
+						$params->summed_field_names : array()) as $field) {
+		$dbinfo=content_database_info(content_fields($field));
+
+		$colinfo=array_pop($dbinfo['columns']);
+		$retval[]=array($dbinfo['table'],$colinfo['column']);
+		}
+
+	return $retval;
+	}
+
+function geoclustering_get_nodes_sql(&$params,$summed_field_function=NULL)
 {
 	$geofield_dbinfo=content_database_info(content_fields(
 											$params->geofield_name));
 	//!!! mis returnitakse, kui mitmel content typel on sama field?
 
 	$geofield_table="{" . $geofield_dbinfo['table'] . "}";
-	$sql="FROM {node} JOIN " . $geofield_table . " ON (" .
+	$sql=" FROM {node} JOIN " . $geofield_table . " ON (" .
 								$geofield_table . ".vid={node}.vid)";
 
 	$joined_tables=array("{node}",$geofield_table);
+
+		/*******************************/
+		/*****                     *****/
+		/***** Add node_conditions *****/
+		/*****                     *****/
+		/*******************************/
 
 	$where_sql="";
 	$where_params=array();
@@ -354,20 +376,80 @@ function geoclustering_get_nodes_sql(&$params)
 		$where_sql=" WHERE " . $where_sql;
 		}
 
-	return array($sql . $where_sql,$where_params,$joined_tables,
+		/**********************************/
+		/*****                        *****/
+		/***** Add summed_field_names *****/
+		/*****                        *****/
+		/**********************************/
+
+		// This must be done after node_conditions because if they use
+		//   the same field, the most restrictive JOIN (i.e. not LEFT JOIN)
+		//   must be done
+
+	$select_fields_sql="";
+	$summed_field_idx=0;
+	foreach (geoclustering_get_summed_fields_info($params) as $info) {
+		list($table,$column)=$info;
+		$table="{" . $table . "}";
+
+		if (!in_array($table,$joined_tables)) {
+			$sql.=" LEFT JOIN " . $table .
+							" ON (" . $table . ".vid={node}.vid)";
+			$joined_tables[]=$table;
+			}
+
+		$column=$table . "." . $column;
+		if ($summed_field_function) {
+			$column=$summed_field_function . "(" . $column . ")";
+			}
+
+		$select_fields_sql.="," . $column .
+									" AS summed_field_" . $summed_field_idx;
+		$summed_field_idx++;
+		}
+
+	return array($select_fields_sql . $sql . $where_sql,
+				$where_params,
+				$joined_tables,
 				geo_load(array('table_name' => $geofield_dbinfo['table'])));
 	}
 
-function geoclustering_add_to_clusters(&$clusters,$row,$idx)
+function geoclustering_summed_fields_from_row(&$row)
 {
-	if (!isset($clusters[$idx])) {
-		$clusters[$idx]=array(0.0,0.0,0,array());
+	$prefix_len=strlen('summed_field_');
+	$summed_fields=array();
+	foreach ($row as $field => $value) {
+		if (!strpos($field,'summed_field_')) {
+			$summed_fields[(int)substr($field,$prefix_len)]=
+						$value + 0;		// +0 casts to numeric type
+			}
 		}
+	ksort($summed_fields);
+	return $summed_fields;
+	}
 
-	$clusters[$idx][0]+=$row[0];
-	$clusters[$idx][1]+=$row[1];
-	$clusters[$idx][2]+=$row[2];
-	//!!! add to summed_fields
+function geoclustering_cast_to_numeric($a)
+{
+	return $a + 0;
+	}
+
+function geoclustering_numeric_sum($a,$b)
+{
+	return $a + $b;
+	}
+
+function geoclustering_add_to_clusters(&$clusters,$row,$key)
+{
+	if (!isset($clusters[$key])) {
+		$clusters[$key]=$row;
+		}
+	else {
+		$clusters[$key][0]+=$row[0];
+		$clusters[$key][1]+=$row[1];
+		$clusters[$key][2]+=$row[2];
+		$clusters[$key][3]=array_map('geoclustering_numeric_sum',
+												$clusters[$key][3],$row[3]);
+		}
 	}
 
 function geoclustering_recalc_tree($params)
@@ -397,7 +479,7 @@ function geoclustering_recalc_tree($params)
 								'{geo}' => '')));
 
 	$r=db_query("SELECT " .	$geo_handler->x($geo_handler) . " AS lon," .
-							$geo_handler->y($geo_handler) . " AS lat " .
+							$geo_handler->y($geo_handler) . " AS lat" .
 							$sql_from,
 				$query_params);
 
@@ -406,7 +488,8 @@ function geoclustering_recalc_tree($params)
 		list($idx,$dummy)=geoclustering_calc_cluster_idx(
 							array($row['lon'],$row['lat']),$params);
 		geoclustering_add_to_clusters($clusters,
-				array($row['lon'],$row['lat'],1,''),	//!!! summed_fields
+				array($row['lon'],$row['lat'],1,
+								geoclustering_summed_fields_from_row($row)),
 				$idx);
 		}
 
@@ -424,7 +507,7 @@ function geoclustering_recalc_tree($params)
 			$insert_rows[]=array(	array(	$cluster[0] / max(1,$cluster[2]),
 											$cluster[1] / max(1,$cluster[2])),
 									array(	$cluster[2],
-											'',		//!!! summed_fields
+											implode(' ',$cluster[3]),
 											$params_hash_sql,
 											$level,
 											$idx));
@@ -481,13 +564,13 @@ function geoclustering_recalc_cluster($cluster_idx,$cluster_coords,
 		/*****************************************/
 
 	list($sql_from,$query_params,$tables,$geo_handler)=
-									geoclustering_get_nodes_sql($params);
+								geoclustering_get_nodes_sql($params,'SUM');
 
 		//!!! add weight to avg_* (also in parent cluster recalculation)
 
 	$query="SELECT COUNT(*) AS nr_of_nodes," .
 			"AVG(" . $geo_handler->x($geo_handler) . ") AS avg_longitude," .
-			"AVG(" . $geo_handler->y($geo_handler) . ") AS avg_latitude " .
+			"AVG(" . $geo_handler->y($geo_handler) . ") AS avg_latitude" .
 			$sql_from . " AND " .
 			$geo_handler->intersects($geo_handler,
 					"POLYGON((%f %f,%f %f,%f %f,%f %f,%f %f))") . " AND " .
@@ -513,7 +596,7 @@ function geoclustering_recalc_cluster($cluster_idx,$cluster_coords,
 				$cluster_data['avg_longitude'] * $cluster_data['nr_of_nodes'],
 				$cluster_data['avg_latitude']  * $cluster_data['nr_of_nodes'],
 				$cluster_data['nr_of_nodes'],
-				array());		//!!! summed_fields
+				geoclustering_summed_fields_from_row($cluster_data));
 
 		/*****************************************************************/
 		/*****                                                       *****/
@@ -548,11 +631,12 @@ function geoclustering_recalc_cluster($cluster_idx,$cluster_coords,
 			}
 		else {
 			geoclustering_add_to_clusters($clusters_data_for_level,
-							array(	$row['lon'] * $row['nr_of_nodes'],
-									$row['lat'] * $row['nr_of_nodes'],
-									$row['nr_of_nodes'],
-									''),	//!!! summed_fields
-							$row['level']-1);
+						array(	$row['lon'] * $row['nr_of_nodes'],
+								$row['lat'] * $row['nr_of_nodes'],
+								$row['nr_of_nodes'],
+								array_map('geoclustering_cast_to_numeric',
+										explode(' ',$row['summed_fields']))),
+						$row['level']-1);
 			}
 		}
 
@@ -567,6 +651,8 @@ function geoclustering_recalc_cluster($cluster_idx,$cluster_coords,
 		/*****                                                *****/
 		/**********************************************************/
 
+		//!!! Combine multiple INSERT/UPDATE/DELETE statements into one
+
 	foreach ($clusters_data_for_level as $level => $data) {
 		$where_clause="WHERE params_hash=%s AND level=%d AND idx=%d";
 		$cluster_selection_params=array($params_hash_sql,
@@ -575,7 +661,7 @@ function geoclustering_recalc_cluster($cluster_idx,$cluster_coords,
 		list($longitude,$latitude,$nr_of_nodes,$summed_fields)=$data;
 		$longitude/=max(1,$nr_of_nodes);
 		$latitude /=max(1,$nr_of_nodes);
-		$summed_fields='';	//!!!
+		$summed_fields=implode(' ',$summed_fields);
 
 		if (!$nr_of_nodes) {
 			db_query("DELETE FROM {geoclustering_clusters} " . $where_clause,
@@ -789,6 +875,7 @@ function geoclustering_views_query_alter(&$view,&$query)
 								"FROM {geoclustering_uptodate_trees} " .
 								"WHERE params_hash=%s",$params_hash_sql));
 		if (!$row['cnt']) {
+				//!!! After locking, re-check {geoclustering_uptodate_trees}
 			geoclustering_recalc_tree($params);
 			}
 
@@ -928,6 +1015,7 @@ function geoclustering_views_query_alter(&$view,&$query)
 		/*******************************************************************/
 
 	$orig_fields=$query->fields;
+	$orig_table_queue=$query->table_queue;
 
 	$view->query=new views_query('geoclustering_clusters','cluster_id');
 	foreach ($where_clauses as $idx => $clause) {
@@ -936,6 +1024,8 @@ function geoclustering_views_query_alter(&$view,&$query)
 
 	$view->query->add_where(NULL,"params_hash = %s",$params_hash_sql);
 	$view->query->add_where(NULL,"level = %d",$level);
+
+	$summed_fields_info=geoclustering_get_summed_fields_info($params);
 
 	foreach ($orig_fields as $field_def) {
 		if (empty($field_def['table'])) {
@@ -948,24 +1038,42 @@ function geoclustering_views_query_alter(&$view,&$query)
 				}
 			}
 
-		if ($field_def['table'] == 'node' && $field_def['field'] == nid) {
+		$table=$field_def['table'];
+
+			// $table might be an alias, so resolve it to real table name
+
+		if (isset($orig_table_queue[$table]['join']->table)) {
+			$table=$orig_table_queue[$table]['join']->table;
+			}
+
+		if ($table == 'node' && $field_def['field'] == nid) {
 			$view->query->add_field('geoclustering_clusters','idx',
 													$field_def['alias']);
 			continue;
 			}
 
-		if ($field_def['table'] == 'geoclustering_clusters') {
-			$view->query->add_field($field_def['table'],$field_def['field'],
+		if ($table == 'geoclustering_clusters') {
+			$view->query->add_field($table,$field_def['field'],
 													$field_def['alias']);
 			continue;
 			}
 
-		/*!!! handle CCK fields corresponding to summed_fields:
-			[field] => field_diameter_value
-			[table] => node_data_field_diameter
-			[alias] => node_data_field_diameter_field_diameter_value
-
-			SUBSTRING('11 222 333' FROM (POSITION(' ' in '11 222 333')+1))
-			*/
+		$summed_fields_idx=array_search(array($table,$field_def['field']),
+										$summed_fields_info);
+		if ($summed_fields_idx !== FALSE) {
+			$field='{geoclustering_clusters}.summed_fields';
+				// This is ugly SQL compatible with MySQL and PostgreSQL,
+				//   equivalent to PostgreSQL SPLIT_PART() and
+				//   MySQL SUBSTRING_INDEX()
+			for ($i=0;$i < $summed_fields_idx;$i++) {
+				$field="SUBSTRING(" . $field . " FROM (POSITION(' ' IN " .
+														$field . ")+1))";
+				}
+			if ($summed_fields_idx < count($summed_fields_info)-1) {
+				$field="SUBSTRING(" . $field .
+						" FROM 1 FOR (POSITION(' ' IN " . $field . ")-1))";
+				}
+			$view->query->add_field(NULL,$field,$field_def['alias']);
+			}
 		}
 	}
