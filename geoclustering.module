@@ -689,7 +689,7 @@ function geoclustering_recalc_cluster($cluster_idx,$cluster_coords,
 						"params_hash,level,idx) " . 
 						"VALUES (" .
 						$clusters_geo_handler->point($longitude,$latitude) .
-						",%d,'%s',%s,%d,%d)",
+						",%d,%d,'%s',%s,%d,%d)",
 						$query_params);
 				}
 			}
