@@ -986,6 +986,13 @@ function geoclustering_views_query_alter(&$view,&$query)
 	if ($level == -2) {
 		//!!! Wildcards must be disabled in argument handler
 
+			/************************************************************/
+			/*****                                                  *****/
+			/*****    Query is going to be from {node} table.       *****/
+			/***** Add additional WHERE fields from node_conditions *****/
+			/*****                                                  *****/
+			/************************************************************/
+
 		foreach (geoclustering_get_node_conditions($params) as $clause) {
 			$query->add_where($clause['table'],$clause['sql'],
 														$clause['param']);
@@ -1017,13 +1024,20 @@ function geoclustering_views_query_alter(&$view,&$query)
 	$orig_fields=$query->fields;
 	$orig_table_queue=$query->table_queue;
 
+		// Create new views_query
+
 	$view->query=new views_query('geoclustering_clusters','cluster_id');
+
+		// Add WHERE clauses
+
 	foreach ($where_clauses as $idx => $clause) {
 		$view->query->add_where(NULL,$clause,(!$idx) ? $where_args : array());
 		}
 
 	$view->query->add_where(NULL,"params_hash = %s",$params_hash_sql);
 	$view->query->add_where(NULL,"level = %d",$level);
+
+		// Add SELECT fields
 
 	$summed_fields_info=geoclustering_get_summed_fields_info($params);
 
@@ -1046,7 +1060,7 @@ function geoclustering_views_query_alter(&$view,&$query)
 			$table=$orig_table_queue[$table]['join']->table;
 			}
 
-		if ($table == 'node' && $field_def['field'] == nid) {
+		if ($table == 'node' && $field_def['field'] == 'nid') {
 			$view->query->add_field('geoclustering_clusters','idx',
 													$field_def['alias']);
 			continue;
