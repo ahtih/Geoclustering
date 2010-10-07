@@ -51,6 +51,11 @@ function geoclustering_schema()
 				'unsigned' => TRUE,
 				),
 
+			'min_nid' => array(
+				'description' => 'Minimum Node ID of nodes in this cluster',
+				'type' => 'int',
+				),
+
 			'summed_fields' => array(
 				'description' => 'Summed data fields from nodes ' .
 														'in this cluster',

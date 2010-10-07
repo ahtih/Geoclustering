@@ -447,8 +447,9 @@ function geoclustering_add_to_clusters(&$clusters,$row,$key)
 		$clusters[$key][0]+=$row[0];
 		$clusters[$key][1]+=$row[1];
 		$clusters[$key][2]+=$row[2];
-		$clusters[$key][3]=array_map('geoclustering_numeric_sum',
-												$clusters[$key][3],$row[3]);
+		$clusters[$key][3]=min($row[3],$clusters[$key][3]);
+		$clusters[$key][4]=array_map('geoclustering_numeric_sum',
+												$clusters[$key][4],$row[4]);
 		}
 	}
 
@@ -479,7 +480,8 @@ function geoclustering_recalc_tree($params)
 								'{geo}' => '')));
 
 	$r=db_query("SELECT " .	$geo_handler->x($geo_handler) . " AS lon," .
-							$geo_handler->y($geo_handler) . " AS lat" .
+							$geo_handler->y($geo_handler) . " AS lat," .
+							"{node}.nid AS nid" .
 							$sql_from,
 				$query_params);
 
@@ -488,7 +490,7 @@ function geoclustering_recalc_tree($params)
 		list($idx,$dummy)=geoclustering_calc_cluster_idx(
 							array($row['lon'],$row['lat']),$params);
 		geoclustering_add_to_clusters($clusters,
-				array($row['lon'],$row['lat'],1,
+				array($row['lon'],$row['lat'],1,$row['nid'],
 								geoclustering_summed_fields_from_row($row)),
 				$idx);
 		}
@@ -507,7 +509,8 @@ function geoclustering_recalc_tree($params)
 			$insert_rows[]=array(	array(	$cluster[0] / max(1,$cluster[2]),
 											$cluster[1] / max(1,$cluster[2])),
 									array(	$cluster[2],
-											implode(' ',$cluster[3]),
+											$cluster[3],
+											implode(' ',$cluster[4]),
 											$params_hash_sql,
 											$level,
 											$idx));
@@ -528,11 +531,11 @@ function geoclustering_recalc_tree($params)
 	foreach ($insert_rows as $row) {
 			//!!! optimise this by combining several INSERTs into one
 		db_query("INSERT INTO {geoclustering_clusters} " .
-					"(coords,nr_of_nodes,summed_fields," .
+					"(coords,nr_of_nodes,min_nid,summed_fields," .
 					"params_hash,level,idx) " . 
 					"VALUES (" .
 						$clusters_geo_handler->point($row[0][0],$row[0][1]) .
-						",%d,'%s',%s,%d,%d)",
+						",%d,%d,'%s',%s,%d,%d)",
 				$row[1]);
 		}
 
@@ -568,7 +571,7 @@ function geoclustering_recalc_cluster($cluster_idx,$cluster_coords,
 
 		//!!! add weight to avg_* (also in parent cluster recalculation)
 
-	$query="SELECT COUNT(*) AS nr_of_nodes," .
+	$query="SELECT COUNT(*) AS nr_of_nodes,MIN({node}.nid) AS min_nid," .
 			"AVG(" . $geo_handler->x($geo_handler) . ") AS avg_longitude," .
 			"AVG(" . $geo_handler->y($geo_handler) . ") AS avg_latitude" .
 			$sql_from . " AND " .
@@ -596,6 +599,7 @@ function geoclustering_recalc_cluster($cluster_idx,$cluster_coords,
 				$cluster_data['avg_longitude'] * $cluster_data['nr_of_nodes'],
 				$cluster_data['avg_latitude']  * $cluster_data['nr_of_nodes'],
 				$cluster_data['nr_of_nodes'],
+				$cluster_data['min_nid'],
 				geoclustering_summed_fields_from_row($cluster_data));
 
 		/*****************************************************************/
@@ -607,7 +611,7 @@ function geoclustering_recalc_cluster($cluster_idx,$cluster_coords,
 	$clusters_query="SELECT level,idx," .
 				$clusters_geo_handler->x($clusters_geo_handler) . " AS lon," .
 				$clusters_geo_handler->y($clusters_geo_handler) . " AS lat," .
-				"nr_of_nodes,summed_fields " .
+				"nr_of_nodes,min_nid,summed_fields " .
 				"FROM {geoclustering_clusters} " .
 				"WHERE params_hash=%s AND (level=0";
 	$clusters_query_params=array($params_hash_sql);
@@ -634,6 +638,7 @@ function geoclustering_recalc_cluster($cluster_idx,$cluster_coords,
 						array(	$row['lon'] * $row['nr_of_nodes'],
 								$row['lat'] * $row['nr_of_nodes'],
 								$row['nr_of_nodes'],
+								$row['min_nid'],
 								array_map('geoclustering_cast_to_numeric',
 										explode(' ',$row['summed_fields']))),
 						$row['level']-1);
@@ -658,7 +663,7 @@ function geoclustering_recalc_cluster($cluster_idx,$cluster_coords,
 		$cluster_selection_params=array($params_hash_sql,
 								$level,
 								$cluster_idx >> ($params->maxlevel-$level));
-		list($longitude,$latitude,$nr_of_nodes,$summed_fields)=$data;
+		list($longitude,$latitude,$nr_of_nodes,$min_nid,$summed_fields)=$data;
 		$longitude/=max(1,$nr_of_nodes);
 		$latitude /=max(1,$nr_of_nodes);
 		$summed_fields=implode(' ',$summed_fields);
@@ -669,18 +674,18 @@ function geoclustering_recalc_cluster($cluster_idx,$cluster_coords,
 			}
 		else {
 			$query_params=array_merge(
-						array($nr_of_nodes,$summed_fields),
+						array($nr_of_nodes,$min_nid,$summed_fields),
 						$cluster_selection_params);
 			if (isset($cluster_exists[$level])) {
 				db_query("UPDATE {geoclustering_clusters} SET " .
 						"coords=" .
 						$clusters_geo_handler->point($longitude,$latitude) .
-						",nr_of_nodes=%d,summed_fields='%s' " .
+						",nr_of_nodes=%d,min_nid=%d,summed_fields='%s' " .
 						$where_clause,$query_params);
 				}
 			else {
 				db_query("INSERT INTO {geoclustering_clusters} " .
-						"(coords,nr_of_nodes,summed_fields," .
+						"(coords,nr_of_nodes,min_nid,summed_fields," .
 						"params_hash,level,idx) " . 
 						"VALUES (" .
 						$clusters_geo_handler->point($longitude,$latitude) .
@@ -1061,8 +1066,11 @@ function geoclustering_views_query_alter(&$view,&$query)
 			}
 
 		if ($table == 'node' && $field_def['field'] == 'nid') {
-			$view->query->add_field('geoclustering_clusters','idx',
-													$field_def['alias']);
+			$view->query->add_field(NULL,
+					"(CASE WHEN {geoclustering_clusters}.nr_of_nodes = 1 " .
+						"THEN '' || {geoclustering_clusters}.min_nid " .
+						"ELSE 'c' || {geoclustering_clusters}.idx END)",
+					$field_def['alias']);
 			continue;
 			}
 
