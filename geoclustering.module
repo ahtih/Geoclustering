@@ -316,8 +316,8 @@ function geoclustering_get_node_conditions(&$params)
 				}
 
 			$retval[]=array('table' => $table,
-							'sql' => "%s." . $column . " = " .
-										db_type_placeholder($column_type),
+							'sql' => array("","." . $column . " = " .
+										db_type_placeholder($column_type)),
 							'param' => $required_value);
 			}
 		}
@@ -371,8 +371,7 @@ function geoclustering_get_nodes_sql(&$params,$summed_field_function=NULL)
 		if ($where_sql) {
 			$where_sql.=" AND ";
 			}
-		$where_sql.=$clause['sql'];
-		$where_params[]=$prefixed_table;
+		$where_sql.=implode($prefixed_table,$clause['sql']);
 		$where_params[]=$clause['param'];
 		}
 
@@ -1003,8 +1002,10 @@ function geoclustering_views_query_alter(&$view,&$query)
 			/************************************************************/
 
 		foreach (geoclustering_get_node_conditions($params) as $clause) {
-			$query->add_where(NULL,$clause['sql'],
-					$query->ensure_table($clause['table']),$clause['param']);
+			$query->add_where(NULL,
+					implode($query->ensure_table($clause['table']),
+														$clause['sql']),
+					$clause['param']);
 			}
 
 		//!!! add WHERE clause "geofield IS NOT NULL"
