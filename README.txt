@@ -55,6 +55,7 @@ Geo needs the following patches for Geoclustering to really work:
 - http://drupal.org/files/issues/geo-filter-float.patch
 - http://drupal.org/files/issues/geo-ewkb-parsing.patch
 - http://drupal.org/files/issues/geo-883032.patch
+- http://drupal.org/files/issues/geo-table-prefixes-776436.patch
 
 If using WFS module, this also needs patching to support BBOX requests:
 - http://drupal.org/files/issues/wfs-filter-changes.patch

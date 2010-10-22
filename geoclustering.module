@@ -1,6 +1,8 @@
 <?php
 // $Id$
 
+//!!! Hook into "Clear all caches" operation
+
 function geoclustering_extract_coords_from_node(&$node,&$params)
 {
 	$location=$node->{$params->geofield_name}[0]['geo'];
@@ -297,7 +299,7 @@ function geoclustering_get_node_conditions(&$params)
 				// Check if the field is in {node} table
 
 			if (isset($node_schema['fields'][$field])) {
-				$table="{node}";
+				$table="node";
 				$column=$field;
 				$column_type=$node_schema['fields'][$field]['type'];
 				}
@@ -306,7 +308,7 @@ function geoclustering_get_node_conditions(&$params)
 
 				$dbinfo=content_database_info(content_fields($field));
 
-				$table="{" . $dbinfo['table'] . "}";
+				$table=$dbinfo['table'];
 				foreach ($dbinfo['columns'] as $col => $colinfo) {
 					$column=$colinfo['column'];
 					$column_type=$colinfo['type'];
@@ -314,7 +316,7 @@ function geoclustering_get_node_conditions(&$params)
 				}
 
 			$retval[]=array('table' => $table,
-							'sql' => $table . "." . $column . " = " .
+							'sql' => "%s." . $column . " = " .
 										db_type_placeholder($column_type),
 							'param' => $required_value);
 			}
@@ -360,15 +362,17 @@ function geoclustering_get_nodes_sql(&$params,$summed_field_function=NULL)
 	$where_params=array();
 
 	foreach (geoclustering_get_node_conditions($params) as $clause) {
-		if (!in_array($clause['table'],$joined_tables)) {
-			$sql.=" JOIN " . $clause['table'] .
-							" ON (" . $clause['table'] . ".vid={node}.vid)";
-			$joined_tables[]=$clause['table'];
+		$prefixed_table="{" . $clause['table'] . "}";
+		if (!in_array($prefixed_table,$joined_tables)) {
+			$sql.=" JOIN " . $prefixed_table .
+							" ON (" . $prefixed_table . ".vid={node}.vid)";
+			$joined_tables[]=$prefixed_table;
 			}
 		if ($where_sql) {
 			$where_sql.=" AND ";
 			}
 		$where_sql.=$clause['sql'];
+		$where_params[]=$prefixed_table;
 		$where_params[]=$clause['param'];
 		}
 
@@ -475,7 +479,7 @@ function geoclustering_recalc_tree($params)
 					array(	'{geoclustering_clusters}' => '',
 							'{geoclustering_uptodate_trees}' => ''),
 					array_merge(array_combine($tables,$tables),
-						array('{geoclustering_uptodate_trees_select}' =>
+						array('geoclustering_uptodate_trees_select' =>
 										'{geoclustering_uptodate_trees}',
 								'{geo}' => '')));
 
@@ -999,8 +1003,8 @@ function geoclustering_views_query_alter(&$view,&$query)
 			/************************************************************/
 
 		foreach (geoclustering_get_node_conditions($params) as $clause) {
-			$query->add_where($clause['table'],$clause['sql'],
-														$clause['param']);
+			$query->add_where(NULL,$clause['sql'],
+					$query->ensure_table($clause['table']),$clause['param']);
 			}
 
 		//!!! add WHERE clause "geofield IS NOT NULL"
