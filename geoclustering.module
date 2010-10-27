@@ -1073,9 +1073,9 @@ function geoclustering_views_query_alter(&$view,&$query)
 
 		if ($table == 'node' && $field_def['field'] == 'nid') {
 			$view->query->add_field(NULL,
-					"(CASE WHEN {geoclustering_clusters}.nr_of_nodes = 1 " .
-						"THEN '' || {geoclustering_clusters}.min_nid " .
-						"ELSE 'c' || {geoclustering_clusters}.idx END)",
+					"(CASE WHEN geoclustering_clusters.nr_of_nodes = 1 " .
+						"THEN '' || geoclustering_clusters.min_nid " .
+						"ELSE 'c' || geoclustering_clusters.idx END)",
 					$field_def['alias']);
 			continue;
 			}
@@ -1089,7 +1089,7 @@ function geoclustering_views_query_alter(&$view,&$query)
 		$summed_fields_idx=array_search(array($table,$field_def['field']),
 										$summed_fields_info);
 		if ($summed_fields_idx !== FALSE) {
-			$field='{geoclustering_clusters}.summed_fields';
+			$field='geoclustering_clusters.summed_fields';
 				// This is ugly SQL compatible with MySQL and PostgreSQL,
 				//   equivalent to PostgreSQL SPLIT_PART() and
 				//   MySQL SUBSTRING_INDEX()
