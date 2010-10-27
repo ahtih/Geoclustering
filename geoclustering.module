@@ -826,6 +826,17 @@ function geoclustering_apply_query_replacements($query_replacements,$str)
 	return $str;
 	}
 
+function geoclustering_sql_concat($array)
+{
+	global $db_type;
+	if ($db_type == 'mysql' || $db_type == 'mysqli') {
+		return "CONCAT(" . implode(",",$array) . ")";
+		}
+	else {
+		return implode(" || ",$array);
+		}
+	}
+
 /**
  * Implementation of hook_views_query_alter()
  */
@@ -1074,8 +1085,11 @@ function geoclustering_views_query_alter(&$view,&$query)
 		if ($table == 'node' && $field_def['field'] == 'nid') {
 			$view->query->add_field(NULL,
 					"(CASE WHEN geoclustering_clusters.nr_of_nodes = 1 " .
-						"THEN '' || geoclustering_clusters.min_nid " .
-						"ELSE 'c' || geoclustering_clusters.idx END)",
+						"THEN " . geoclustering_sql_concat(array(
+									"''","geoclustering_clusters.min_nid")) .
+						" ELSE " . geoclustering_sql_concat(array(
+									"'c'","geoclustering_clusters.idx")) .
+						" END)",
 					$field_def['alias']);
 			continue;
 			}
