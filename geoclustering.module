@@ -949,6 +949,7 @@ function geoclustering_views_query_alter(&$view,&$query)
 			$q="SELECT level,COUNT(*) AS nr_of_clusters," .
 						"SUM(nr_of_nodes) AS sum_nr_of_nodes " .
 					"FROM {geoclustering_clusters} " .
+										"AS geoclustering_clusters " .
 					"WHERE params_hash=%s AND level >= %d AND level <= %d";
 			foreach ($where_clauses as $clause) {
 				$q.=" AND (" . $clause . ")";
