@@ -1,8 +1,6 @@
 <?php
 // $Id$
 
-//!!! Hook into "Clear all caches" operation
-
 function geoclustering_extract_coords_from_node(&$node,&$params)
 {
 	$location=$node->{$params->geofield_name}[0]['geo'];
@@ -806,6 +804,16 @@ function geoclustering_nodeapi(&$node, $op)
 												$params,$params_hash_sql);
 			}
 		}
+	}
+
+/**
+ * Implementation of hook_flush_caches().
+ */
+function geoclustering_flush_caches()
+{
+	db_query("TRUNCATE TABLE {geoclustering_uptodate_trees}");
+	db_query("TRUNCATE TABLE {geoclustering_clusters}");
+	return array();
 	}
 
 /**
