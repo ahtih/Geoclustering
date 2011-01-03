@@ -1056,7 +1056,8 @@ function geoclustering_views_query_alter(&$view,&$query)
 
 		// Create new views_query
 
-	$view->query=new views_query('geoclustering_clusters','cluster_id');
+	$view->base_table='geoclustering_clusters';
+	$view->init_query();
 
 		// Add WHERE clauses
 
