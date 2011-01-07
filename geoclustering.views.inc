@@ -27,7 +27,7 @@ function geoclustering_views_data()
 
 			'join' => array('node' => array(
 						'left_field' => 'nid',
-						'field' => 'cluster_id',
+						'field' => 'min_nid',
 						'handler' => 'geoclustering_handler_join_dummy')),
 			),
 
@@ -78,7 +78,7 @@ function geoclustering_views_data()
 
 	$data['geoclustering_clusters']=$clusters_table;
 
-	$data['node']=array('geoclustering_level' => array(
+	$data['node']['geoclustering_level']=array(
 		'group' => t('Geoclustering'),
 		'title' => t('Geoclustering level'),
 		'help' => t('Pseudo-argument to take the view data from ' .
@@ -87,7 +87,50 @@ function geoclustering_views_data()
 			'handler' => 'geoclustering_handler_argument_level',
 			'numeric' => TRUE,
 			),
-		));
+		);
+
+
+		/*************************************/
+		/*****                           *****/
+		/***** Add join for {node} table *****/
+		/*****                           *****/
+		/*************************************/
+
+	$data['node']['table']['join']['geoclustering_clusters']=array(
+		'left_field' => 'min_nid',
+		'field' => 'nid',
+		'extra' => array(array(	'table' => 'geoclustering_clusters',
+								'field' => 'nr_of_nodes',
+								'value' => 1,
+								'numeric' => TRUE)),
+		);
+
+		/***********************************************/
+		/*****                                     *****/
+		/***** Add join for {node_revisions} table *****/
+		/*****                                     *****/
+		/***********************************************/
+
+	$data['node_revisions']['table']['join']['geoclustering_clusters']=array(
+		'left_table' => 'node',
+		'left_field' => 'vid',
+		'field' => 'vid',
+		);
+
+		/****************************************/
+		/*****                              *****/
+		/***** Add joins for all CCK tables *****/
+		/*****                              *****/
+		/****************************************/
+
+	foreach (content_fields() as $cck_field) {
+		$db_info=content_database_info($cck_field);
+		$data[$db_info['table']]['table']['join']['geoclustering_clusters']=
+										array(	'left_table' => 'node',
+												'left_field' => 'vid',
+												'field' => 'vid',
+												);
+		}
 
 	return $data;
 	}

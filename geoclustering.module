@@ -1125,6 +1125,10 @@ function geoclustering_views_query_alter(&$view,&$query)
 						" FROM 1 FOR (POSITION(' ' IN " . $field . ")-1))";
 				}
 			$view->query->add_field(NULL,$field,$field_def['alias']);
+			continue;
 			}
+
+		$view->query->add_field($table,$field_def['field'],
+													$field_def['alias']);
 		}
 	}
