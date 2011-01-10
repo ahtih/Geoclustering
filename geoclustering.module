@@ -26,6 +26,41 @@ function geoclustering_extract_coords_from_node(&$node,&$params)
 	return array($point['lon'],$point['lat']);
 	}
 
+function geoclustering_get_approximate_nr_of_nodes($coords,&$params)
+{
+	$params_hash_sql=geoclustering_get_params_hash_sql($params);
+	geoclustering_ensure_uptodate_tree($params,$params_hash_sql);
+
+	list($dummy,$min_cluster_coords)=geoclustering_calc_cluster_idx(
+								array($coords[0],$coords[1]),$params);
+	list($dummy,$max_cluster_coords)=geoclustering_calc_cluster_idx(
+								array($coords[2],$coords[3]),$params);
+
+	$nr_of_clusters_in_area=1;
+	for ($i=0;$i < 2;$i++) {
+		$nr_of_clusters_in_area*=(2 * ($coords[$i]-$coords[2+$i])) /
+				(($min_cluster_coords[2+$i]-$min_cluster_coords[0+$i]) + 
+				( $max_cluster_coords[2+$i]-$max_cluster_coords[0+$i]));
+		}
+
+	$level=$params->maxlevel - round(log($nr_of_clusters_in_area / 200,2));
+
+	$clusters_geo_handler=geo_load(array('name' => 'geoclustering_clusters'));
+
+	list($bbox_sql,$query_params)=geoclustering_get_bbox_sql(
+											$clusters_geo_handler,$coords);
+
+	$query_params[]=$level;
+	$query_params[]=$params_hash_sql;
+
+	return db_result(db_query(
+				"SELECT COALESCE(SUM(nr_of_nodes),0) " .
+						"FROM {geoclustering_clusters} " .
+						"WHERE " . $bbox_sql .
+							" AND level=%d AND params_hash=%s",
+				$query_params));
+	}
+
 function geoclustering_calc_cluster_idx($coords,&$params)
 {
 		/***********************************/
@@ -415,6 +450,24 @@ function geoclustering_get_nodes_sql(&$params,$summed_field_function=NULL)
 				geo_load(array('table_name' => $geofield_dbinfo['table'])));
 	}
 
+function geoclustering_get_bbox_sql($geo_handler,$coords)
+{
+	$query=$geo_handler->intersects($geo_handler,
+					"POLYGON((%f %f,%f %f,%f %f,%f %f,%f %f))") . " AND " .
+			$geo_handler->x($geo_handler) . " < %f AND " .
+			$geo_handler->y($geo_handler) . " < %f";
+
+	$query_params=array();
+	foreach (array(0,1,2,1,2,3,0,3,0,1) as $i) {
+		$query_params[]=$coords[$i];
+		}
+
+	$query_params[]=$coords[2];
+	$query_params[]=$coords[3];
+
+	return array($query,$query_params);
+	}
+
 function geoclustering_summed_fields_from_row(&$row)
 {
 	$prefix_len=strlen('summed_field_');
@@ -534,8 +587,8 @@ function geoclustering_recalc_tree($params)
 		db_query("INSERT INTO {geoclustering_clusters} " .
 					"(coords,nr_of_nodes,min_nid,summed_fields," .
 					"params_hash,level,idx) " . 
-					"VALUES (" .
-						$clusters_geo_handler->point($row[0][0],$row[0][1]) .
+					"VALUES (" . $clusters_geo_handler->pointFromText(
+							'POINT(' . $row[0][0] . ' ' . $row[0][1] . ')') .
 						",%d,%d,'%s',%s,%d,%d)",
 				$row[1]);
 		}
@@ -558,6 +611,17 @@ function geoclustering_recalc_tree($params)
 				array($params_hash_sql,$params_hash_sql));
 	}
 
+function geoclustering_ensure_uptodate_tree(&$params,$params_hash_sql)
+{
+	$row=db_fetch_array(db_query("SELECT COUNT(*) AS cnt " .
+								"FROM {geoclustering_uptodate_trees} " .
+								"WHERE params_hash=%s",$params_hash_sql));
+	if (!$row['cnt']) {
+			//!!! After locking, re-check {geoclustering_uptodate_trees}
+		geoclustering_recalc_tree($params);
+		}
+	}
+
 function geoclustering_recalc_cluster($cluster_idx,$cluster_coords,
 												&$params,$params_hash_sql)
 {
@@ -572,21 +636,14 @@ function geoclustering_recalc_cluster($cluster_idx,$cluster_coords,
 
 		//!!! add weight to avg_* (also in parent cluster recalculation)
 
+	list($bbox_sql,$bbox_query_params)=geoclustering_get_bbox_sql(
+											$geo_handler,$cluster_coords);
+
 	$query="SELECT COUNT(*) AS nr_of_nodes,MIN({node}.nid) AS min_nid," .
 			"AVG(" . $geo_handler->x($geo_handler) . ") AS avg_longitude," .
 			"AVG(" . $geo_handler->y($geo_handler) . ") AS avg_latitude" .
-			$sql_from . " AND " .
-			$geo_handler->intersects($geo_handler,
-					"POLYGON((%f %f,%f %f,%f %f,%f %f,%f %f))") . " AND " .
-			$geo_handler->x($geo_handler) . " < %f AND " .
-			$geo_handler->y($geo_handler) . " < %f";
-
-	foreach (array(0,1,2,1,2,3,0,3,0,1) as $i) {
-		$query_params[]=$cluster_coords[$i];
-		}
-
-	$query_params[]=$cluster_coords[2];
-	$query_params[]=$cluster_coords[3];
+			$sql_from . " AND " . $bbox_sql;
+	$query_params=array_merge($query_params,$bbox_query_params);
 
 	$clusters_geo_handler=geo_load(array('name' => 'geoclustering_clusters'));
 
@@ -677,10 +734,11 @@ function geoclustering_recalc_cluster($cluster_idx,$cluster_coords,
 			$query_params=array_merge(
 						array($nr_of_nodes,$min_nid,$summed_fields),
 						$cluster_selection_params);
+			$coords_sql=$clusters_geo_handler->pointFromText(
+							'POINT(' . $longitude . ' ' . $latitude . ')');
 			if (isset($cluster_exists[$level])) {
 				db_query("UPDATE {geoclustering_clusters} SET " .
-						"coords=" .
-						$clusters_geo_handler->point($longitude,$latitude) .
+						"coords=" . $coords_sql .
 						",nr_of_nodes=%d,min_nid=%d,summed_fields='%s' " .
 						$where_clause,$query_params);
 				}
@@ -688,9 +746,7 @@ function geoclustering_recalc_cluster($cluster_idx,$cluster_coords,
 				db_query("INSERT INTO {geoclustering_clusters} " .
 						"(coords,nr_of_nodes,min_nid,summed_fields," .
 						"params_hash,level,idx) " . 
-						"VALUES (" .
-						$clusters_geo_handler->point($longitude,$latitude) .
-						",%d,%d,'%s',%s,%d,%d)",
+						"VALUES (" . $coords_sql . ",%d,%d,'%s',%s,%d,%d)",
 						$query_params);
 				}
 			}
@@ -892,19 +948,7 @@ function geoclustering_views_query_alter(&$view,&$query)
 	if ($level != -2) {		// Do this always except when argument specifies
 							//  that view should always return nodes
 
-			/**************************************/
-			/*****                            *****/
-			/***** Recalculate tree if needed *****/
-			/*****                            *****/
-			/**************************************/
-
-		$row=db_fetch_array(db_query("SELECT COUNT(*) AS cnt " .
-								"FROM {geoclustering_uptodate_trees} " .
-								"WHERE params_hash=%s",$params_hash_sql));
-		if (!$row['cnt']) {
-				//!!! After locking, re-check {geoclustering_uptodate_trees}
-			geoclustering_recalc_tree($params);
-			}
+		geoclustering_ensure_uptodate_tree($params,$params_hash_sql);
 
 			/************************************************/
 			/*****                                      *****/
