@@ -4,6 +4,18 @@
 class geoclustering_handler_argument_level
 									extends views_handler_argument
 {
+	function pre_query()
+		{
+			$this->geoclustering_tree_name=
+								$this->options['geoclustering_tree_name'];
+
+			// Set default argument here, because if validation of some
+			//   other argument fails, query() will never be called
+			if ($this->has_default_argument()) {
+				$this->geoclustering_level=$this->get_default_argument();
+				}
+			}
+
 	function query()
 		{
 				// Actual query modification for this argument happens in
@@ -14,8 +26,6 @@ class geoclustering_handler_argument_level
 				//   geoclustering_views_query_alter() to react on.
 
 			$this->geoclustering_level=$this->argument;
-			$this->geoclustering_tree_name=
-								$this->options['geoclustering_tree_name'];
 			}
 
 	function option_definition()
