@@ -14,6 +14,8 @@ class geoclustering_handler_argument_level
 			if ($this->has_default_argument()) {
 				$this->geoclustering_level=$this->get_default_argument();
 				}
+
+			//!!! max_results parameeter lisada
 			}
 
 	function query()

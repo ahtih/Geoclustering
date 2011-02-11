@@ -901,9 +901,60 @@ function geoclustering_sql_concat($array)
 		}
 	}
 
-/**
- * Implementation of hook_views_query_alter()
- */
+function geoclustering_get_cluster_info($tree_name,$views_cluster_id)
+{
+	$matches=array();
+	if (!preg_match('/^c([0-9]+)_([0-9]+)$/',$views_cluster_id,$matches)) {
+		return FALSE;
+		}
+
+	list(,$level,$idx)=$matches;
+	$level=0 + $level;
+	$idx=0 + $idx;
+	if (!is_int($level) || !is_int($idx)) {
+		return FALSE;
+		}
+
+	ctools_include('export');
+	$ctools_objects=ctools_export_load_object('geoclustering_tree_params',
+												'names',array($tree_name));
+	if (empty($ctools_objects)) {
+		return FALSE;
+		}
+
+	$params=array_pop($ctools_objects);
+	$params_hash_sql=geoclustering_get_params_hash_sql($params);
+
+	geoclustering_ensure_uptodate_tree($params,$params_hash_sql);
+
+	$r=db_query("SELECT nr_of_nodes,summed_fields " .
+						"FROM {geoclustering_clusters} " .
+						"WHERE params_hash=%s AND level=%d AND idx=%d",
+				$params_hash_sql,$level,$idx);
+	$row=db_fetch_array($r);
+
+	if (!$row) {
+		return array();
+		}
+
+	$row_summed_fields=explode(' ',$row['summed_fields']);
+
+	$summed_fields=array();
+
+	foreach (($params->summed_field_names ?
+				$params->summed_field_names : array()) as $idx => $field) {
+		$summed_fields[$field]=0 + $row_summed_fields[$idx];
+		}
+
+	return array($row['nr_of_nodes'],$summed_fields);
+	}
+
+/***************************************************************************/
+/************************                          *************************/
+/************************ hook_views_query_alter() *************************/
+/************************                          *************************/
+/***************************************************************************/
+
 function geoclustering_views_query_alter(&$view,&$query)
 {
 		//!!! do recalc check also when using geoclustering_clusters as base table
@@ -1141,7 +1192,8 @@ function geoclustering_views_query_alter(&$view,&$query)
 						"THEN " . geoclustering_sql_concat(array(
 									"''","geoclustering_clusters.min_nid")) .
 						" ELSE " . geoclustering_sql_concat(array(
-									"'c'","geoclustering_clusters.idx")) .
+									"'c'","geoclustering_clusters.level",
+									"'_'","geoclustering_clusters.idx")) .
 						" END)",
 					$field_def['alias']);
 			continue;
