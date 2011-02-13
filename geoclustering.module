@@ -1,9 +1,9 @@
 <?php
 // $Id$
 
-function geoclustering_extract_coords_from_node(&$node,&$params)
+function geoclustering_extract_coords_from_node(&$node,$geofield_name)
 {
-	$location=$node->{$params->geofield_name}[0]['geo'];
+	$location=$node->{$geofield_name}[0]['geo'];
 
 	//!!! switch to using content_format() once it starts working in Geo
 
@@ -23,7 +23,7 @@ function geoclustering_extract_coords_from_node(&$node,&$params)
 	//!!! gracefully handle non-point geometries
 
 	$point=$point['value'];
-	return array($point['lon'],$point['lat']);
+	return array(0 + $point['lon'],0 + $point['lat']);
 	}
 
 function geoclustering_get_approximate_nr_of_nodes($coords,&$params)
@@ -221,7 +221,7 @@ function geoclustering_params_and_coords_for_node(&$node)
 		if ($node_matches) {
 			$matching_params[geoclustering_get_params_hash_sql($params)]=
 					array($params,geoclustering_extract_coords_from_node(
-															$node,$params));
+											$node,$params->geofield_name));
 			}
 		}
 
