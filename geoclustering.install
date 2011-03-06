@@ -199,4 +199,28 @@ function geoclustering_uninstall()
 	module_load_include('inc','geo','includes/geo.api');
 	geo_delete(geo_load(array('name' => 'geoclustering_clusters')));
 	}
+
+function geoclustering_requirements($phase)
+{
+	$requirements=array();
+	if ($phase == 'runtime') {
+		$req=array('title' => t('Geoclustering dataset configured ' .
+														'in {geo} table'));
+		if (db_result(db_query("SELECT COUNT(*) from {geo} " .
+								"WHERE name='geoclustering_clusters'"))) {
+			$req['severity']=REQUIREMENT_OK;
+			$req['value']=t('Yes');
+			}
+		else {
+			$req['severity']=REQUIREMENT_ERROR;
+			$req['value']=t('No');
+			$req['description']=t("Geo dataset %name does " .
+					"exist in {geo} table. To fix this, you can try " .
+					"disabling and then re-enabling Geoclustering module.",
+					array('%name' => 'geoclustering_clusters'));
+			}
+		$requirements['geoclustering_geo']=$req;
+		}
+	return $requirements;
+	}
 ?>
