@@ -64,8 +64,10 @@ function geoclustering_schema()
 				),
 			);
 
-	$fields=array_merge($fields,$geo->sqlFieldDefinition('coords'));
-	$fields['coords']['not null']=TRUE;
+	if (method_exists($geo,'sqlFieldDefinition')) {
+		$fields=array_merge($fields,$geo->sqlFieldDefinition('coords'));
+		$fields['coords']['not null']=TRUE;
+		}
 
 	return array(
 		'geoclustering_clusters' => array(
