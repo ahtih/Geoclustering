@@ -450,17 +450,22 @@ function geoclustering_get_nodes_sql(&$params,$summed_field_function=NULL)
 				geo_load(array('table_name' => $geofield_dbinfo['table'])));
 	}
 
+function geoclustering_polygon_sql($coords)
+{
+	$params=array();
+	foreach (array(0,1,2,1,2,3,0,3,0,1) as $i) {
+		$params[]=$coords[$i];
+		}
+	return array("POLYGON((%f %f,%f %f,%f %f,%f %f,%f %f))",$params);
+	}
+
 function geoclustering_get_bbox_sql($geo_handler,$coords)
 {
-	$query=$geo_handler->intersects($geo_handler,
-					"POLYGON((%f %f,%f %f,%f %f,%f %f,%f %f))") . " AND " .
+	list($wkt,$query_params)=geoclustering_polygon_sql($coords);
+
+	$query=$geo_handler->intersects($geo_handler,$wkt) . " AND " .
 			$geo_handler->x($geo_handler) . " < %f AND " .
 			$geo_handler->y($geo_handler) . " < %f";
-
-	$query_params=array();
-	foreach (array(0,1,2,1,2,3,0,3,0,1) as $i) {
-		$query_params[]=$coords[$i];
-		}
 
 	$query_params[]=$coords[2];
 	$query_params[]=$coords[3];
