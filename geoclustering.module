@@ -366,8 +366,10 @@ function geoclustering_get_summed_fields_info(&$params)
 						$params->summed_field_names : array()) as $field) {
 		$dbinfo=content_database_info(content_fields($field));
 
-		$colinfo=array_pop($dbinfo['columns']);
-		$retval[]=array($dbinfo['table'],$colinfo['column']);
+		if (!empty($dbinfo['columns'])) {
+			$colinfo=array_pop($dbinfo['columns']);
+			$retval[]=array($dbinfo['table'],$colinfo['column']);
+			}
 		}
 
 	return $retval;
